@@ -1,25 +1,30 @@
 import yaml
 import argparse
-from gevent import sleep
+from gevent import Greenlet
 from gevent.event import Event
 from gevent.monkey import patch_all
 patch_all(thread=False)
 
 from .logging import PrintLogger
+from .netmon import monitor_network, monitor_nodes
 from .server import StratumServer
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Run powerpool!')
+    parser = argparse.ArgumentParser(description='Run powerpool!')
     parser.add_argument('config', type=argparse.FileType('r'),
                         help='yaml configuration file to run with')
     args = parser.parse_args()
 
     # implement some defaults
     config = dict(stratum={'port': 8123, 'address': '127.0.0.1'},
-                  coinserv=[{'port': 22555, 'address': '127.0.0.1'}],
-                  pool_address='',
+                  coinserv=[{'port': 22555,
+                             'address': '127.0.0.1',
+                             'username': 'dogecoinrpc',
+                             'password': '42NHhTQJQ6xJHbwAqvCfpteToMU46PdGZej6soWQfvow'}],
+                  donate_address='',
+                  pool_address='D7QJyeBNuwEqxsyVCLJi3pHs64uPdMDuBa',
+                  extranonce_serv_size=4,
                   extranonce_size=4)
     add_config = yaml.load(args.config) or {}
     config.update(add_config)
@@ -28,9 +33,26 @@ def main():
     client_states = set()
     net_state = {'live_connections': [],
                  'down_connections': [],
+                 # current known height of blockchain. used to track if we
+                 # need to reset our mining clients
                  'current_height': 0,
+                 # a collection of known transaction objects
                  'transactions': {},
-                 'block_found': Event()}
+                 # event to broadcast a block being found by workers
+                 'block_found': Event(),
+                 # Store completed block information here for network monitor
+                 # to broadcase
+                 'complete_block': None,
+                 # the latest block identified by the network monitor. Will
+                 # change every few seconds
+                 'current_block': '',
+                 # index of all jobs currently accepting work. Contains complete
+                 # block templates
+                 'jobs': {},
+                 'latest_job': None,
+                 'job_counter': 0,
+                 # the difficulty that will be transmitted to clients
+                 'difficulty': 256}
     # shared data between greenlets, like the block they should be on, etc
     logger = PrintLogger()
     # start the stratum server reactor thread
@@ -39,11 +61,12 @@ def main():
         logger,
         client_states,
         config,
+        net_state,
         spawn=10000)
     sserver.start()
-    while True:
-        for idx, dct in enumerate(client_states):
-            if 'new_block_event' in dct:
-                print("Setting for {}".format(idx))
-                dct['new_block_event'].set()
-        sleep(1)
+    network = Greenlet(monitor_network, logger, client_states,
+                       net_state, config)
+    nodes = Greenlet(monitor_nodes, config['coinserv'], logger, net_state)
+    nodes.start()
+    network.start()
+    network.join()

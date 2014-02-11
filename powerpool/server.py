@@ -4,8 +4,11 @@ import socket
 from binascii import hexlify
 from struct import pack
 from cryptokit.base58 import get_bcaddress_version
+from gevent import sleep
 from gevent.event import Event
 from gevent.server import StreamServer
+from hashlib import sha1
+from os import urandom
 
 
 class StratumServer(StreamServer):
@@ -16,45 +19,88 @@ class StratumServer(StreamServer):
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
 
-    def __init__(self, listener, logger, client_states, difficulty, config, **kwargs):
+    def __init__(self, listener, logger, client_states, config, net_state, **kwargs):
         StreamServer.__init__(self, listener, **kwargs)
         self.logger = logger
         self.client_states = client_states
         self.config = config
-        self.difficulty = 0
+        self.net_state = net_state
         self.id_count = 0
-
-    def send_error(self, fp, num=20, id_val=1):
-        fp.write(json.dumps({'id': id_val,
-                             'result': None,
-                             'error': (num, self.errors[num], None)}))
-        fp.flush()
 
     def handle(self, sock, address):
         fp = sock.makefile()
         # create a dictionary to track our
         state = {'authenticated': False,
+                 'subscribed': False,
                  'address': None,
-                 'id': hexlify(pack('Q', self.id_count))}
+                 'id': hexlify(pack('Q', self.id_count)),
+                 'subscr_difficulty': None,
+                 'subscr_notify': None}
         # Warning: Not thread safe in the slightest, should be good for gevent
-        self.id_count += 1
+        self.id_count += 2
+        # track the id of the last message recieved
+        msg_id = None
+
+        # watch for new block announcements and push accordingly
+        def new_block_call(event):
+            fp.write("new block announced!\n")
+            fp.flush()
+        state['new_block_event'] = Event()
+        state['new_block_event'].rawlink(new_block_call)
+
+        def send_error(num=20, id_val=1):
+            fp.write(json.dumps({'id': id_val,
+                                 'result': None,
+                                 'error': (num, self.errors[num], None)},
+                                separators=(',', ':')))
+            fp.flush()
+
+        def send_success(id_val=1):
+            fp.write(json.dumps({'id': id_val, 'result': True, 'error': False},
+                                separators=(',', ':')))
+            fp.flush()
+
+        def push_difficulty():
+            send = {'params': [self.net_state['difficulty']],
+                    'id': None,
+                    'method': 'mining.set_difficulty'}
+            fp.write(json.dumps(send, separators=(',', ':')))
+            fp.flush()
+
+        def push_job(flush=False):
+            """ Pushes the latest job down to the client. Flush is whether
+            or not he should dump his previous jobs or not. Dump will occur
+            when a new block is found since work on the old block is
+            invalid."""
+            while True:
+                jobid = self.net_state['latest_job']
+                try:
+                    job = self.net_state['jobs'][jobid]
+                    break
+                except KeyError:
+                    self.logger.debug("No jobs available for worker!")
+                    sleep(1)
+
+            send = {'params':
+                    [jobid, job.hash_prev, job.coinbase1, job.coinbase2,
+                        job.merklebranch_hex, job.version_packed, job.target,
+                        job.ntime, flush],
+                    'id': None,
+                    'method': 'mining.notify'}
+            fp.write(json.dumps(send, separators=(',', ':')))
+            fp.flush()
 
         # do a finally call to cleanup when we exit
         try:
             self.client_states.add(state)
-            # watch for new block announcements and push accordingly
-            def new_block_call(event):
-                fp.write("new block announced!\n")
-                fp.flush()
-            state['new_block_event'] = Event()
-            state['new_block_event'].rawlink(new_block_call)
+
             while True:
                 try:
                     data = json.loads(fp.readline())
                 except ValueError:
-                    self.send_error(fp)
-                    break
-
+                    send_error()
+                    continue
+                msg_id = data.get('id', 1)
                 self.logger.debug("Data {} recieved on client {}"
                                   .format(data, state['id']))
 
@@ -62,29 +108,44 @@ class StratumServer(StreamServer):
                 if 'method' in data:
                     meth = data['method'].lower()
                     if meth == 'mining.subscribe':
-                        ret = {'result': ((("mining.set_difficulty", "something"),
-                                          ("mining.notify", state['id'])),
-                                          state['id'],
-                                          self.config['extranonce_size'])}
+                        state['subscr_notify'] = sha1(urandom(4))
+                        state['subscr_difficulty'] = sha1(urandom(4))
+                        ret = {'result':
+                               ((("mining.set_difficulty",
+                                  state['subscr_difficulty']),
+                                 ("mining.notify",
+                                  state['subscr_notify'])),
+                                state['id'],
+                                self.config['extranonce_size']),
+                               'error': None,
+                               'id': msg_id}
+                        state['subscribed'] = True
+                        fp.write(json.dumps(ret))
+                        fp.flush()
+                        continue
                     elif meth == "mining.authorize":
+                        if state['subscribed'] is False:
+                            send_error(25)
+                            continue
+
+                        # if the address they passed is a valid address,
+                        # use it. Otherwise use the pool address
                         username = data.get('params', [None])[0]
                         if get_bcaddress_version(username):
-                            address = username
+                            state['address'] = username
                         else:
-                            address = self.config['pool_address']
-                        ret = {'result': True}
+                            state['address'] = self.config['pool_address']
                         state['authorized'] = True
+                        send_success(msg_id)
+                        push_difficulty()
+                        push_job()
+                        continue
                     elif meth == "mining.submit":
-                        pass
+                        if state['authorized'] is False:
+                            send_error(24)
+                            continue
+                        send_success(msg_id)
 
-                msg_id = data.get('id', 1)
-                if not ret:
-                    self.send_error()
-                else:
-                    ret.update(dict(id=msg_id, re))
-
-                fp.write(json.dumps(ret))
-                fp.flush()
             sock.shutdown(socket.SHUT_WR)
             sock.close()
         finally:
