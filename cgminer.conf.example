@@ -1,0 +1,41 @@
+{
+"pools" : [
+       {
+               "url" : "stratum+tcp://localhost:8123",
+               "user" : "DLmW4utjzP7ML8iVyoQQ",
+               "pass" : "none"
+       }
+],
+"debug" : true,
+"intensity" : "1",
+"vectors" : "1",
+"worksize" : "256",
+"kernel" : "scrypt",
+"lookup-gap" : "2",
+"thread-concurrency" : "8000",
+"shaders" : "1792",
+"gpu-engine" : "900-1050",
+"gpu-fan" : "40-100",
+"gpu-memclock" : "1450",
+"gpu-powertune" : "20",
+"gpu-memdiff" : "0",
+"gpu-vddc" : "0.000",
+"temp-cutoff" : "90",
+"temp-overheat" : "90",
+"temp-target" : "75",
+"api-mcast-port" : "4028",
+"api-port" : "4028",
+"expiry" : "120",
+"gpu-dyninterval" : "7",
+"gpu-platform" : "0",
+"gpu-threads" : "2",
+"hotplug" : "5",
+"log" : "5",
+"no-pool-disable" : true,
+"queue" : "1",
+"scan-time" : "60",
+"scrypt" : true,
+"temp-hysteresis" : "3",
+"shares" : "0",
+"kernel-path" : "/usr/local/bin"
+}

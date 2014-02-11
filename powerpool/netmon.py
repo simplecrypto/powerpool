@@ -120,6 +120,8 @@ def monitor_network(logger, client_states, net_state, config):
             if check_height(conn):
                 # dump the current transaction pool, refresh and push the event
                 net_state['transactions'] = {}
+                net_state['jobs'] = {}
+                net_state['latest_job'] = None
                 update_pool(conn)
                 push_new_block()
             else:

@@ -9,6 +9,7 @@ from gevent.event import Event
 from gevent.server import StreamServer
 from hashlib import sha1
 from os import urandom
+from pprint import pformat
 
 
 class StratumServer(StreamServer):
@@ -19,7 +20,8 @@ class StratumServer(StreamServer):
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
 
-    def __init__(self, listener, logger, client_states, config, net_state, **kwargs):
+    def __init__(self, listener, logger, client_states, config, net_state,
+                 **kwargs):
         StreamServer.__init__(self, listener, **kwargs)
         self.logger = logger
         self.client_states = client_states
@@ -43,28 +45,32 @@ class StratumServer(StreamServer):
 
         # watch for new block announcements and push accordingly
         def new_block_call(event):
-            fp.write("new block announced!\n")
-            fp.flush()
+            self.logger.info("new block announced!\n")
+            #fp.flush()
         state['new_block_event'] = Event()
         state['new_block_event'].rawlink(new_block_call)
 
         def send_error(num=20, id_val=1):
-            fp.write(json.dumps({'id': id_val,
-                                 'result': None,
-                                 'error': (num, self.errors[num], None)},
-                                separators=(',', ':')))
+            err = {'id': id_val,
+                   'result': None,
+                   'error': (num, self.errors[num], None)}
+            self.logger.debug("Sending error response: {}"
+                              .format(pformat(err)))
+            fp.write(json.dumps(err, separators=(',', ':')) + "\n")
             fp.flush()
 
         def send_success(id_val=1):
-            fp.write(json.dumps({'id': id_val, 'result': True, 'error': False},
-                                separators=(',', ':')))
+            succ = {'id': id_val, 'result': True, 'error': None}
+            self.logger.debug("Sending error response: {}"
+                              .format(pformat(succ)))
+            fp.write(json.dumps(succ, separators=(',', ':')) + "\n")
             fp.flush()
 
         def push_difficulty():
             send = {'params': [self.net_state['difficulty']],
                     'id': None,
                     'method': 'mining.set_difficulty'}
-            fp.write(json.dumps(send, separators=(',', ':')))
+            fp.write(json.dumps(send, separators=(',', ':')) + "\n")
             fp.flush()
 
         def push_job(flush=False):
@@ -87,17 +93,20 @@ class StratumServer(StreamServer):
                         job.ntime, flush],
                     'id': None,
                     'method': 'mining.notify'}
-            fp.write(json.dumps(send, separators=(',', ':')))
+            fp.write(json.dumps(send, separators=(',', ':')) + "\n")
             fp.flush()
 
         # do a finally call to cleanup when we exit
         try:
-            self.client_states.add(state)
+            self.client_states[state['id']] = state
 
             while True:
+                line = fp.readline()
                 try:
-                    data = json.loads(fp.readline())
+                    data = json.loads(line)
                 except ValueError:
+                    self.logger.debug("Data {} not JSON"
+                                      .format(line))
                     send_error()
                     continue
                 msg_id = data.get('id', 1)
@@ -108,8 +117,8 @@ class StratumServer(StreamServer):
                 if 'method' in data:
                     meth = data['method'].lower()
                     if meth == 'mining.subscribe':
-                        state['subscr_notify'] = sha1(urandom(4))
-                        state['subscr_difficulty'] = sha1(urandom(4))
+                        state['subscr_notify'] = sha1(urandom(4)).hexdigest()
+                        state['subscr_difficulty'] = sha1(urandom(4)).hexdigest()
                         ret = {'result':
                                ((("mining.set_difficulty",
                                   state['subscr_difficulty']),
@@ -120,7 +129,9 @@ class StratumServer(StreamServer):
                                'error': None,
                                'id': msg_id}
                         state['subscribed'] = True
-                        fp.write(json.dumps(ret))
+                        self.logger.debug("Sending subscribe response: {}"
+                                          .format(pformat(ret)))
+                        fp.write(json.dumps(ret) + "\n")
                         fp.flush()
                         continue
                     elif meth == "mining.authorize":
@@ -148,5 +159,9 @@ class StratumServer(StreamServer):
 
             sock.shutdown(socket.SHUT_WR)
             sock.close()
+        except socket.error:
+            pass
+        except Exception:
+            self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            self.client_states.remove(state)
+            del self.client_states[state['id']]

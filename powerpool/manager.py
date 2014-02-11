@@ -30,7 +30,7 @@ def main():
     config.update(add_config)
 
     # stored state of all greenlets. holds events that can be triggered, etc
-    client_states = set()
+    client_states = {}
     net_state = {'live_connections': [],
                  'down_connections': [],
                  # current known height of blockchain. used to track if we
@@ -43,9 +43,6 @@ def main():
                  # Store completed block information here for network monitor
                  # to broadcase
                  'complete_block': None,
-                 # the latest block identified by the network monitor. Will
-                 # change every few seconds
-                 'current_block': '',
                  # index of all jobs currently accepting work. Contains complete
                  # block templates
                  'jobs': {},
