@@ -78,6 +78,7 @@ class StratumServer(StreamServer):
             or not he should dump his previous jobs or not. Dump will occur
             when a new block is found since work on the old block is
             invalid."""
+            job = None
             while True:
                 jobid = self.net_state['latest_job']
                 try:
@@ -88,9 +89,10 @@ class StratumServer(StreamServer):
                     sleep(1)
 
             send = {'params':
-                    [jobid, job.hash_prev, job.coinbase1, job.coinbase2,
-                        job.merklebranch_hex, job.version_packed, job.target,
-                        job.ntime, flush],
+                    [jobid, job.hash_prev, hexlify(job.coinbase1),
+                     hexlify(job.coinbase2), job.merklebranch_hex,
+                     hexlify(job.version_packed), job.target, job.ntime,
+                     flush],
                     'id': None,
                     'method': 'mining.notify'}
             fp.write(json.dumps(send, separators=(',', ':')) + "\n")

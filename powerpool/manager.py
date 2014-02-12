@@ -18,16 +18,14 @@ def main():
 
     # implement some defaults
     config = dict(stratum={'port': 8123, 'address': '127.0.0.1'},
-                  coinserv=[{'port': 22555,
-                             'address': '127.0.0.1',
-                             'username': 'dogecoinrpc',
-                             'password': '42NHhTQJQ6xJHbwAqvCfpteToMU46PdGZej6soWQfvow'}],
+                  coinserv=[],
                   donate_address='',
                   pool_address='D7QJyeBNuwEqxsyVCLJi3pHs64uPdMDuBa',
                   extranonce_serv_size=4,
                   extranonce_size=4)
     add_config = yaml.load(args.config) or {}
     config.update(add_config)
+    print(config)
 
     # stored state of all greenlets. holds events that can be triggered, etc
     client_states = {}

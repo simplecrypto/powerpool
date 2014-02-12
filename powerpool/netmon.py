@@ -60,12 +60,13 @@ def monitor_network(logger, client_states, net_state, config):
         new job to all mining clients """
         for idx, dct in enumerate(client_states):
             if 'new_block_event' in dct:  # ensure they've inited...
-                print("Signaling new block for client {}".format(idx))
+                logger.debug("Signaling new block for client {}".format(idx))
                 dct['new_block_event'].set()
 
     def update_pool(conn):
         # request local memory pool and load it in
         bt = conn.getblocktemplate()
+        pprint(bt)
         dirty = 0   # track a change in the transaction pool
         for trans in bt['transactions']:
             if trans['hash'] not in net_state['transactions']:
@@ -108,25 +109,31 @@ def monitor_network(logger, client_states, net_state, config):
     try:
         while True:
             try:
-                conn = net_state['live_connections'][0]
-            except IndexError:
-                logger.info(
-                    "Couldn't connect to any RPC servers, sleeping for {}"
-                    .format(1))
-                sleep(1)
-                continue
+                try:
+                    conn = net_state['live_connections'][0]
+                except IndexError:
+                    logger.info(
+                        "Couldn't connect to any RPC servers, sleeping for {}"
+                        .format(1))
+                    sleep(1)
+                    continue
 
-            # if there's a new block registered
-            if check_height(conn):
-                # dump the current transaction pool, refresh and push the event
-                net_state['transactions'] = {}
-                net_state['jobs'] = {}
-                net_state['latest_job'] = None
-                update_pool(conn)
-                push_new_block()
-            else:
-                # update the pool
-                update_pool(conn)
+                # if there's a new block registered
+                if check_height(conn):
+                    # dump the current transaction pool, refresh and push the event
+                    logger.debug("New block announced! Wiping previous jobs...")
+                    net_state['job_counter'] = 0
+                    net_state['transactions'] = {}
+                    net_state['jobs'] = {}
+                    net_state['latest_job'] = None
+                    update_pool(conn)
+                    push_new_block()
+                else:
+                    # update the pool
+                    update_pool(conn)
+            except Exception:
+                logger.error("Unhandled exception!", exc_info=True)
+                pass
 
             sleep(1)
 
