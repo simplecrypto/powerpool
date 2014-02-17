@@ -1,8 +1,13 @@
 import traceback
-import sys
 
 
 class PrintLogger(object):
+    levels = {0: 'DEBU',
+              10: 'INFO',
+              20: 'WARN',
+              30: 'ERRO',
+              40: 'CRIT'}
+
     def __init__(self, level=0):
         self.level = level
 
@@ -22,6 +27,11 @@ class PrintLogger(object):
         self.log(40, *args, **kwargs)
 
     def log(self, level, msg, exc_info=False):
+        if level in self.levels:
+            msg = "[%s]: %s" % (self.levels[level], msg)
+        else:
+            msg = "[%04i]: %s" % (level, msg)
+
         if self.level <= level:
             print(msg)
         if exc_info:

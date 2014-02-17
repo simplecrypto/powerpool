@@ -47,8 +47,11 @@ class StratumServer(StreamServer):
 
         # watch for new block announcements and push accordingly
         def new_block_call(event):
-            self.logger.info("new block announced!\n")
-            #fp.flush()
+            """ An event triggered by the network monitor when it learns of a
+            new block on the network. All old work is now useless so must be
+            flushed. """
+            push_job(flush=True)
+            fp.flush()
         state['new_block_event'] = Event()
         state['new_block_event'].rawlink(new_block_call)
 
@@ -69,6 +72,9 @@ class StratumServer(StreamServer):
             fp.flush()
 
         def push_difficulty():
+            """ Pushes the current difficulty to the client. Currently this
+            only happens uppon initial connect, but would be used for vardiff
+            """
             send = {'params': [self.net_state['difficulty']],
                     'id': None,
                     'method': 'mining.set_difficulty'}
@@ -88,28 +94,25 @@ class StratumServer(StreamServer):
                     break
                 except KeyError:
                     self.logger.debug("No jobs available for worker!")
-                    sleep(1)
+                    sleep(0.5)
 
             send_params = job.stratum_params() + [flush]
-            # 0: job_id
-            # 1: prevhash
-            # 2: coinbase1
-            # 3: coinbase2
-            # 4: merkle_branch
-            # 5: version
-            # 6: nbits
-            # 7: ntime
-            # 8: clean_jobs
+            # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
+            # 5: version 6: nbits 7: ntime 8: clean_jobs
             self.logger.debug(
                 "Sending new job to worker\n\tjob_id: {0}\n\tprevhash: {1}"
-                "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}\n\t"
-                "version: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}\n\tclean_jobs: {8}\n"
+                "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
+                "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
+                "\n\tclean_jobs: {8}\n"
                 .format(*send_params, bt=job.bits_target))
-            send = {'params': send_params, 'id': None, 'method': 'mining.notify'}
+            send = {'params': send_params,
+                    'id': None,
+                    'method': 'mining.notify'}
             fp.write(json.dumps(send, separators=(',', ':')) + "\n")
             fp.flush()
 
-        def submit_job(params):
+        def submit_job(data):
+            params = data['params']
             # [worker_name, job_id, extranonce2, ntime, nonce]
             # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
             self.logger.debug(
@@ -139,14 +142,49 @@ class StratumServer(StreamServer):
                                                               job.bits_target)
                     send_success(msg_id)
                     if valid_net:
-                        self.logger.debug("Valid network block identified")
+                        self.logger.log(35, "Valid network block identified!")
                 else:
                     self.logger.debug("Share REJECTED!")
                     send_error(23)
 
+        def authenticate(data):
+            # if the address they passed is a valid address,
+            # use it. Otherwise use the pool address
+            username = data.get('params', [None])[0]
+            if get_bcaddress_version(username):
+                state['address'] = username
+            else:
+                self.logger.debug(
+                    "Invalid address provided, falling back to "
+                    "donation address")
+                state['address'] = self.config['pool_address']
+            state['authenticated'] = True
+            send_success(msg_id)
+            push_difficulty()
+            push_job()
+
+        def subscribe(data):
+            state['subscr_notify'] = sha1(urandom(4)).hexdigest()
+            state['subscr_difficulty'] = sha1(urandom(4)).hexdigest()
+            ret = {'result':
+                   ((("mining.set_difficulty",
+                      state['subscr_difficulty']),
+                     ("mining.notify",
+                      state['subscr_notify'])),
+                    state['id'],
+                    self.config['extranonce_size']),
+                   'error': None,
+                   'id': msg_id}
+            state['subscribed'] = True
+            self.logger.debug("Sending subscribe response: {}"
+                              .format(pformat(ret)))
+            fp.write(json.dumps(ret) + "\n")
+            fp.flush()
+
+        self.client_states[state['id']] = state
+
         # do a finally call to cleanup when we exit
         try:
-            self.client_states[state['id']] = state
 
             while True:
                 line = fp.readline().strip()
@@ -173,23 +211,8 @@ class StratumServer(StreamServer):
                         if state['subscribed'] is True:
                             send_error()
                             continue
-                        state['subscr_notify'] = sha1(urandom(4)).hexdigest()
-                        state['subscr_difficulty'] = sha1(urandom(4)).hexdigest()
-                        ret = {'result':
-                               ((("mining.set_difficulty",
-                                  state['subscr_difficulty']),
-                                 ("mining.notify",
-                                  state['subscr_notify'])),
-                                state['id'],
-                                self.config['extranonce_size']),
-                               'error': None,
-                               'id': msg_id}
-                        state['subscribed'] = True
-                        self.logger.debug("Sending subscribe response: {}"
-                                          .format(pformat(ret)))
-                        fp.write(json.dumps(ret) + "\n")
-                        fp.flush()
-                        continue
+
+                        subscribe(data)
                     elif meth == "mining.authorize":
                         if state['subscribed'] is False:
                             send_error(25)
@@ -198,27 +221,17 @@ class StratumServer(StreamServer):
                             send_error()
                             continue
 
-                        # if the address they passed is a valid address,
-                        # use it. Otherwise use the pool address
-                        username = data.get('params', [None])[0]
-                        if get_bcaddress_version(username):
-                            state['address'] = username
-                        else:
-                            self.logger.debug(
-                                "Invalid address provided, falling back to "
-                                "donation address")
-                            state['address'] = self.config['pool_address']
-                        state['authenticated'] = True
-                        send_success(msg_id)
-                        push_difficulty()
-                        push_job()
-                        continue
+                        authenticate(data)
                     elif meth == "mining.submit":
                         if state['authenticated'] is False:
                             send_error(24)
                             continue
-                        params = data['params']
-                        submit_job(params)
+
+                        submit_job(data)
+                else:
+                    self.logger.warn("Unkown action for command {}"
+                                     .format(data))
+                    send_error()
 
             sock.shutdown(socket.SHUT_WR)
             sock.close()
