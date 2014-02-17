@@ -10,7 +10,6 @@ from cryptokit.block import BlockTemplate
 from gevent import sleep
 from struct import pack
 from copy import copy
-from pprint import pprint, pformat
 
 
 def monitor_nodes(coinserv, logger, net_state):
@@ -29,7 +28,7 @@ def monitor_nodes(coinserv, logger, net_state):
             for serv, conn in zip(coinserv, connections):
                 try:
                     conn.getinfo()
-                except (JSONRPCException, socket.error):
+                except (JSONRPCException, socket.error, ValueError):
                     if conn in net_state['live_connections']:
                         net_state['live_connections'].remove(conn)
                     if conn not in net_state['down_connections']:
@@ -65,37 +64,46 @@ def monitor_network(logger, client_states, net_state, config):
 
     def update_pool(conn):
         # request local memory pool and load it in
-        bt = conn.getblocktemplate()
-        pprint(bt)
+        bt = conn.getblocktemplate({'capabilities': [
+            'coinbasevalue',
+            'coinbase/append',
+            'coinbase',
+            'generation',
+            'time',
+            'transactions/remove',
+            'prevblock',
+        ]})
         dirty = 0   # track a change in the transaction pool
         for trans in bt['transactions']:
             if trans['hash'] not in net_state['transactions']:
                 dirty += 1
-                net_state['transactions'][trans['hash']] = Transaction(
-                    unhexlify(trans['data']),
-                    fees=trans['fee'])
-        if dirty:
+                new_trans = Transaction(unhexlify(trans['data']), fees=trans['fee'])
+                assert trans['hash'] == new_trans.lehexhash
+                net_state['transactions'][trans['hash']] = new_trans
+        if dirty or len(net_state['jobs']) == 0:
             # here we recalculate the current merkle branch and partial
             # coinbases for passing to the mining clients
             coinbase = Transaction()
+            coinbase.version = 2
             # create a coinbase input with encoded height and padding for the
             # extranonces so script length is accurate
-            extranonce_length = config['extranonce_size'] + config['extranonce_serv_size']
+            extranonce_length = (config['extranonce_size'] +
+                                 config['extranonce_serv_size'])
             coinbase.inputs.append(
                 Input.coinbase(bt['height'], b'\0' * extranonce_length))
             # simple output to the proper address and value
             coinbase.outputs.append(
                 Output.to_address(bt['coinbasevalue'], config['pool_address']))
-            coinbase1, coinbase2 = coinbase.assemble(split=True)
-
-            bt_obj = BlockTemplate.from_gbt(bt, coinbase, extranonce_length)
             job_id = hexlify(pack(str("I"), net_state['job_counter']))
+            bt_obj = BlockTemplate.from_gbt(
+                bt, coinbase, extranonce_length,
+                copy(net_state['transactions'].values()))
+            bt_obj.job_id = job_id
             net_state['job_counter'] += 1
             net_state['jobs'][job_id] = bt_obj
             net_state['latest_job'] = job_id
-            logger.debug(
-                "Adding {} new transactions to transaction pool, created job {}"
-                .format(dirty, job_id))
+            logger.debug("Adding {} new transactions to transaction pool, "
+                         "created job {}".format(dirty, job_id))
 
     def check_height(conn):
         # check the block height

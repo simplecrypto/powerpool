@@ -21,8 +21,9 @@ def main():
                   coinserv=[],
                   donate_address='',
                   pool_address='D7QJyeBNuwEqxsyVCLJi3pHs64uPdMDuBa',
-                  extranonce_serv_size=4,
-                  extranonce_size=4)
+                  extranonce_serv_size=8,
+                  extranonce_size=4,
+                  diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000)
     add_config = yaml.load(args.config) or {}
     config.update(add_config)
     print(config)
@@ -47,7 +48,7 @@ def main():
                  'latest_job': None,
                  'job_counter': 0,
                  # the difficulty that will be transmitted to clients
-                 'difficulty': 256}
+                 'difficulty': 4}
     # shared data between greenlets, like the block they should be on, etc
     logger = PrintLogger()
     # start the stratum server reactor thread

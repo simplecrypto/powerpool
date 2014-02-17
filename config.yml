@@ -1,5 +1,0 @@
-coinserv:
-    - port: 22555
-      address: 127.0.0.1
-      username: dogecoinrpc
-      password: 4a6nUKe4TPGd4ZhwQ4HQXzP8jqv5dL8VU8saAFf6xjiY
