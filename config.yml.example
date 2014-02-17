@@ -1,0 +1,26 @@
+# a list of connections to daemons to get block templates from
+# and submit complete blocks to
+coinserv:
+    - port: 19332
+      address: 127.0.0.1
+      username: litecoin
+      password: testing
+
+# a valid address that invalid usernames will go towards
+donate_address: ''
+# address that all blocks will go towards in escrow before sending to users
+pool_address: ''
+# the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
+# sha...
+diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
+
+# port and address to listen on for stratum server
+stratum:
+    port: 3333
+    address: 127.0.0.1
+
+# server side size. synonymous with worker id
+extranonce_serv_size: 8
+# size that clients will generate in bytes
+extranonce_size: 4
+
