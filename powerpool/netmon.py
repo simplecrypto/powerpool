@@ -1,7 +1,5 @@
-import json
 import socket
 
-from future.builtins import bytes
 from future.utils import viewvalues
 from binascii import unhexlify, hexlify
 from bitcoinrpc.proxy import AuthServiceProxy, JSONRPCException
@@ -46,18 +44,11 @@ def monitor_nodes(coinserv, logger, net_state):
 
 
 def monitor_network(logger, client_states, net_state, config):
-    def found_block(event):
-        """ Called when a mining client submits work that solves the network
-        target. Will submit the block to the RPC server and push new work to
-        all clients if it's successfully accepted. """
-        for conn in net_state['live_connections']:
-            conn.submitblock(net_state['complete_block'])
-
     def push_new_block():
         """ Called when a new block was discovered in the longest blockchain.
         This will dump current jobs, create a new job, and then push the
         new job to all mining clients """
-        for idx, dct in enumerate(client_states):
+        for idx, dct in enumerate(viewvalues(client_states)):
             if 'new_block_event' in dct:  # ensure they've inited...
                 logger.debug("Signaling new block for client {}".format(idx))
                 dct['new_block_event'].set()
@@ -113,7 +104,6 @@ def monitor_network(logger, client_states, net_state, config):
             return True
         return False
 
-    net_state['block_found'].rawlink(found_block)
     try:
         while True:
             try:
@@ -130,9 +120,8 @@ def monitor_network(logger, client_states, net_state, config):
                 if check_height(conn):
                     # dump the current transaction pool, refresh and push the event
                     logger.debug("New block announced! Wiping previous jobs...")
-                    net_state['job_counter'] = 0
                     net_state['transactions'] = {}
-                    net_state['jobs'] = {}
+                    net_state['jobs'].clear()
                     net_state['latest_job'] = None
                     update_pool(conn)
                     push_new_block()

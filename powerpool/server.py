@@ -3,6 +3,7 @@ import socket
 
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
+from bitcoinrpc.proxy import JSONRPCException
 from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import BlockTemplate
 from cryptokit import target_from_diff
@@ -22,6 +23,8 @@ class StratumServer(StreamServer):
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
 
+    reuse_addr = False
+
     def __init__(self, listener, logger, client_states, config, net_state,
                  **kwargs):
         StreamServer.__init__(self, listener, **kwargs)
@@ -32,6 +35,14 @@ class StratumServer(StreamServer):
         self.id_count = 0
 
     def handle(self, sock, address):
+        self.logger.debug("Recieving connection from addr {} on sock {}"
+                          .format(address, sock))
+        # Seconds before sending keepalive probes
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 10)
+        # Interval in seconds between keepalive probes
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 1)
+        # Failed keepalive probles before declaring other end dead
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
         fp = sock.makefile()
         # create a dictionary to track our
         state = {'authenticated': False,
@@ -59,14 +70,14 @@ class StratumServer(StreamServer):
             err = {'id': id_val,
                    'result': None,
                    'error': (num, self.errors[num], None)}
-            self.logger.debug("Sending error response: {}"
+            self.logger.debug("error response: {}"
                               .format(pformat(err)))
             fp.write(json.dumps(err, separators=(',', ':')) + "\n")
             fp.flush()
 
         def send_success(id_val=1):
             succ = {'id': id_val, 'result': True, 'error': None}
-            self.logger.debug("Sending error response: {}"
+            self.logger.debug("success response: {}"
                               .format(pformat(succ)))
             fp.write(json.dumps(succ, separators=(',', ':')) + "\n")
             fp.flush()
@@ -128,6 +139,7 @@ class StratumServer(StreamServer):
                 # stale job
                 send_error(21)
             else:
+                self.logger.info(job.job_id)
                 header = job.block_header(
                     nonce=params[4],
                     extra1=state['id'],
@@ -143,8 +155,26 @@ class StratumServer(StreamServer):
                     send_success(msg_id)
                     if valid_net:
                         self.logger.log(35, "Valid network block identified!")
+                        block = job.submit_serial(header)
+                        for conn in self.net_state['live_connections']:
+                            try:
+                                res = conn.submitblock(
+                                    hexlify(block))
+                            except (JSONRPCException, socket.error, ValueError) as e:
+                                self.logger.warn("Damn", exc_info=True)
+                                self.logger.warn(getattr(e, 'error'))
+                            else:
+                                if res is None:
+                                    self.logger.info("NEW BLOCK ACCEPTED!!!")
+                                    self.logger.info(
+                                        "New block at height %i"
+                                        % self.net_state['current_height'])
+                                    self.logger.info(
+                                        "Block coinbase hash %s"
+                                        % job.coinbase.lehexhash)
+
                 else:
-                    self.logger.debug("Share REJECTED!")
+                    self.logger.debug("Low diff share!")
                     send_error(23)
 
         def authenticate(data):
@@ -187,6 +217,7 @@ class StratumServer(StreamServer):
         try:
 
             while True:
+                self.logger.debug("Waiting to recieve new message...")
                 line = fp.readline().strip()
                 # if there's data to read, parse it as json
                 if line:
@@ -198,6 +229,8 @@ class StratumServer(StreamServer):
                         continue
                 # ignore empty strings sent
                 else:
+                    send_error()
+                    sleep(1)
                     continue
 
                 # set the msgid
@@ -241,3 +274,5 @@ class StratumServer(StreamServer):
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
             del self.client_states[state['id']]
+
+        self.logger.info("Closing connection for client {}".format(state['id']))
