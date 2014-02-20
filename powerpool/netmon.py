@@ -1,4 +1,5 @@
 import socket
+import logging
 
 from future.utils import viewvalues
 from binascii import unhexlify, hexlify
@@ -10,7 +11,10 @@ from struct import pack
 from copy import copy
 
 
-def monitor_nodes(coinserv, logger, net_state):
+logger = logging.getLogger('netmon')
+
+
+def monitor_nodes(coinserv, net_state):
     """ Pings rpc interfaces periodically to see if they're up """
     try:
         connections = []
@@ -43,7 +47,7 @@ def monitor_nodes(coinserv, logger, net_state):
         net_state = {}
 
 
-def monitor_network(logger, client_states, net_state, config):
+def monitor_network(client_states, net_state, config):
     def push_new_block():
         """ Called when a new block was discovered in the longest blockchain.
         This will dump current jobs, create a new job, and then push the

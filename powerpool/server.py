@@ -1,6 +1,8 @@
 import json
 import socket
+import logging
 
+from time import time
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
 from bitcoinrpc.proxy import JSONRPCException
@@ -13,9 +15,11 @@ from gevent.server import StreamServer
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
+from simpledoge.tasks import add_share, add_block, add_one_minute
 
 
 class StratumServer(StreamServer):
+    logger = logging.getLogger('stratum_server')
     errors = {20: 'Other/Unknown',
               21: 'Job not found (=stale)',
               22: 'Duplicate share',
@@ -23,12 +27,9 @@ class StratumServer(StreamServer):
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
 
-    reuse_addr = False
-
-    def __init__(self, listener, logger, client_states, config, net_state,
+    def __init__(self, listener, client_states, config, net_state,
                  **kwargs):
         StreamServer.__init__(self, listener, **kwargs)
-        self.logger = logger
         self.client_states = client_states
         self.config = config
         self.net_state = net_state
@@ -50,7 +51,9 @@ class StratumServer(StreamServer):
                  'address': None,
                  'id': hexlify(pack('Q', self.id_count)),
                  'subscr_difficulty': None,
-                 'subscr_notify': None}
+                 'subscr_notify': None,
+                 'shares': {},
+                 'last_graph_transmit': 0}
         # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 2
         # track the id of the last message recieved
@@ -70,15 +73,13 @@ class StratumServer(StreamServer):
             err = {'id': id_val,
                    'result': None,
                    'error': (num, self.errors[num], None)}
-            self.logger.debug("error response: {}"
-                              .format(pformat(err)))
+            self.logger.debug("error response: {}".format(pformat(err)))
             fp.write(json.dumps(err, separators=(',', ':')) + "\n")
             fp.flush()
 
         def send_success(id_val=1):
             succ = {'id': id_val, 'result': True, 'error': None}
-            self.logger.debug("success response: {}"
-                              .format(pformat(succ)))
+            self.logger.debug("success response: {}".format(pformat(succ)))
             fp.write(json.dumps(succ, separators=(',', ':')) + "\n")
             fp.flush()
 
@@ -138,44 +139,94 @@ class StratumServer(StreamServer):
             if not job:
                 # stale job
                 send_error(21)
-            else:
-                self.logger.info(job.job_id)
-                header = job.block_header(
-                    nonce=params[4],
-                    extra1=state['id'],
-                    extra2=params[2],
-                    ntime=params[3])
-                job_target = target_from_diff(self.net_state['difficulty'],
-                                              self.config['diff1'])
-                valid_job = job.validate_scrypt(header, target=job_target)
-                if valid_job:
-                    self.logger.debug("Valid job accepted!")
-                    valid_net = BlockTemplate.validate_scrypt(header,
-                                                              job.bits_target)
-                    send_success(msg_id)
-                    if valid_net:
-                        self.logger.log(35, "Valid network block identified!")
-                        block = job.submit_serial(header)
-                        for conn in self.net_state['live_connections']:
-                            try:
-                                res = conn.submitblock(
-                                    hexlify(block))
-                            except (JSONRPCException, socket.error, ValueError) as e:
-                                self.logger.warn("Damn", exc_info=True)
-                                self.logger.warn(getattr(e, 'error'))
-                            else:
-                                if res is None:
-                                    self.logger.info("NEW BLOCK ACCEPTED!!!")
-                                    self.logger.info(
-                                        "New block at height %i"
-                                        % self.net_state['current_height'])
-                                    self.logger.info(
-                                        "Block coinbase hash %s"
-                                        % job.coinbase.lehexhash)
+                return
 
+            header = job.block_header(
+                nonce=params[4],
+                extra1=state['id'],
+                extra2=params[2],
+                ntime=params[3])
+            job_target = target_from_diff(self.net_state['difficulty'],
+                                          self.config['diff1'])
+            valid_job = job.validate_scrypt(header, target=job_target)
+            if not valid_job:
+                self.logger.debug("Low diff share!")
+                send_error(23)
+                return False
+
+            self.logger.debug("Valid job accepted!")
+            valid_net = BlockTemplate.validate_scrypt(header, job.bits_target)
+            self.net_state['latest_shares'].incr(self.net_state['difficulty'])
+            add_share.delay(state['address'], self.net_state['difficulty'])
+            send_success(msg_id)
+
+            # valid network?
+            if not valid_net:
+                return True
+
+            self.logger.log(35, "Valid network block identified!")
+            block = job.submit_serial(header)
+            for conn in self.net_state['live_connections']:
+                try:
+                    res = conn.submitblock(
+                        hexlify(block))
+                except (JSONRPCException, socket.error, ValueError) as e:
+                    self.logger.error("Block failed to submit to the server!",
+                                      exc_info=True)
+                    self.logger.warn(getattr(e, 'error'))
                 else:
-                    self.logger.debug("Low diff share!")
-                    send_error(23)
+                    if res is None:
+                        add_block.delay(
+                            state['address'],
+                            self.net_state['current_height'],
+                            job.total_value,
+                            job.fee_total,
+                            hexlify(job.bits))
+                        self.logger.info("NEW BLOCK ACCEPTED!!!")
+                        self.logger.info("New block at height %i"
+                                         % self.net_state['current_height'])
+                        self.logger.info("Block coinbase hash %s"
+                                         % job.coinbase.lehexhash)
+                        self.net_state['block_solve'] = int(time())
+                    else:
+                        self.logger.error("Block failed to submit to the server!",
+                                          exc_info=True)
+
+            return True
+
+        def report_shares():
+            """ Goes through the list of recorded shares and aggregates them
+            into one minute chunck for graph. Sends a task to record the minute
+            chunks when one it found greater than zero. """
+            now = int(time())
+            if (now - state['last_graph_transmit']) > 90:
+                # bounds for a share to be grouped for transmission in minute
+                # chunks
+                upper = (now // 60) * 60
+                lower = state['last_graph_transmit']
+                # share records that are to be discarded
+                expire = now - self.config['keep_share']
+                # a list of tuples for transmission
+                chunks = {}
+                # a list of indexes that have expired and are ready for removal
+                rem = []
+                for stamp, shares in state['shares'].iteritems():
+                    if stamp >= lower and stamp < upper:
+                        minute = (stamp // 60) * 60
+                        chunks.setdefault(minute, 0)
+                        chunks[minute] += shares
+                    if stamp < expire:
+                        rem.append(stamp)
+
+                for key in rem:
+                    del state['shares'][key]
+
+                for stamp, shares in chunks.iteritems():
+                    add_one_minute.delay(state['address'], shares, stamp)
+                state['last_graph_transmit'] = upper
+
+            state['shares'].setdefault(now, 0)
+            state['shares'][now] += self.net_state['difficulty']
 
         def authenticate(data):
             # if the address they passed is a valid address,
@@ -217,7 +268,6 @@ class StratumServer(StreamServer):
         try:
 
             while True:
-                self.logger.debug("Waiting to recieve new message...")
                 line = fp.readline().strip()
                 # if there's data to read, parse it as json
                 if line:
@@ -260,7 +310,8 @@ class StratumServer(StreamServer):
                             send_error(24)
                             continue
 
-                        submit_job(data)
+                        if submit_job(data):
+                            report_shares()
                 else:
                     self.logger.warn("Unkown action for command {}"
                                      .format(data))

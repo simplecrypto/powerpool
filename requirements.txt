@@ -3,3 +3,4 @@ bitcoin-python
 cryptokit
 gevent
 pyyaml
+celery

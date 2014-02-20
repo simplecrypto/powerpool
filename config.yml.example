@@ -24,3 +24,14 @@ extranonce_serv_size: 8
 # size that clients will generate in bytes
 extranonce_size: 4
 
+# what difficulty will the server start with? with no vardiff this is static
+# diff
+start_difficulty: 16
+
+# a dictionary of configuration values for the stats server
+# this dictionary gets pushed right to Flask. Address and port are 
+# used to configure the wsgi instance it starts
+stats_config:
+    DEBUG: True
+    address: 127.0.0.1
+    port: 3855
