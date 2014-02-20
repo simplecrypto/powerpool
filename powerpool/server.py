@@ -36,7 +36,7 @@ class StratumServer(StreamServer):
         self.id_count = 0
 
     def handle(self, sock, address):
-        self.logger.debug("Recieving connection from addr {} on sock {}"
+        self.logger.info("Recieving connection from addr {} on sock {}"
                           .format(address, sock))
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 10)
@@ -91,7 +91,6 @@ class StratumServer(StreamServer):
                     'id': None,
                     'method': 'mining.set_difficulty'}
             fp.write(json.dumps(send, separators=(',', ':')) + "\n")
-            fp.flush()
 
         def push_job(flush=False):
             """ Pushes the latest job down to the client. Flush is whether
@@ -154,11 +153,11 @@ class StratumServer(StreamServer):
                 send_error(23)
                 return False
 
+            send_success(msg_id)
             self.logger.debug("Valid job accepted!")
             valid_net = BlockTemplate.validate_scrypt(header, job.bits_target)
             self.net_state['latest_shares'].incr(self.net_state['difficulty'])
             add_share.delay(state['address'], self.net_state['difficulty'])
-            send_success(msg_id)
 
             # valid network?
             if not valid_net:
@@ -168,8 +167,7 @@ class StratumServer(StreamServer):
             block = job.submit_serial(header)
             for conn in self.net_state['live_connections']:
                 try:
-                    res = conn.submitblock(
-                        hexlify(block))
+                    res = conn.submitblock(hexlify(block))
                 except (JSONRPCException, socket.error, ValueError) as e:
                     self.logger.error("Block failed to submit to the server!",
                                       exc_info=True)
@@ -206,7 +204,7 @@ class StratumServer(StreamServer):
                 lower = state['last_graph_transmit']
                 # share records that are to be discarded
                 expire = now - self.config['keep_share']
-                # a list of tuples for transmission
+                # for transmission
                 chunks = {}
                 # a list of indexes that have expired and are ready for removal
                 rem = []
@@ -313,7 +311,7 @@ class StratumServer(StreamServer):
                         if submit_job(data):
                             report_shares()
                 else:
-                    self.logger.warn("Unkown action for command {}"
+                    self.logger.info("Unkown action for command {}"
                                      .format(data))
                     send_error()
 

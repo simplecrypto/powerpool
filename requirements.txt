@@ -4,3 +4,4 @@ cryptokit
 gevent
 pyyaml
 celery
+future

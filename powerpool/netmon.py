@@ -40,6 +40,8 @@ def monitor_nodes(coinserv, net_state):
                 else:
                     if conn not in net_state['live_connections']:
                         net_state['live_connections'].append(conn)
+                        logger.info("Connected to RPC Server {0}. Yay!"
+                                    .format(serv['address']))
                     if conn in net_state['down_connections']:
                         net_state['down_connections'].remove(conn)
             sleep(2)
