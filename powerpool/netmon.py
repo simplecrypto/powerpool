@@ -10,7 +10,6 @@ from gevent import sleep
 from struct import pack
 from copy import copy
 
-
 logger = logging.getLogger('netmon')
 
 
@@ -111,6 +110,7 @@ def monitor_network(client_states, net_state, config):
         return False
 
     try:
+        i = 0
         while True:
             try:
                 try:
@@ -132,13 +132,17 @@ def monitor_network(client_states, net_state, config):
                     update_pool(conn)
                     push_new_block()
                 else:
-                    # update the pool
-                    update_pool(conn)
+                    # check for new transactions every 15 seconds
+                    if i < 75:
+                        i += 1
+                    else:
+                        i = 0
+                        update_pool(conn)
             except Exception:
                 logger.error("Unhandled exception!", exc_info=True)
                 pass
 
-            sleep(1)
+            sleep(.2)
 
     finally:
         net_state = {}

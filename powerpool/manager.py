@@ -90,7 +90,8 @@ def main():
                                 'address': '127.0.0.1',
                                 'port': 3855},
                   stat_window=60,
-                  keep_share=600)
+                  keep_share=600,
+                  celery={})
     # override those defaults with a loaded yaml config
     add_config = yaml.load(args.config) or {}
     config.update(add_config)

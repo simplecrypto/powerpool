@@ -5,3 +5,6 @@ gevent
 pyyaml
 celery
 future
+Flask
+Flask-SQLAlchemy
+simpledoge
