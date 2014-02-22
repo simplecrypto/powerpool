@@ -236,7 +236,7 @@ class StratumServer(StreamServer):
                 self.logger.debug(
                     "Invalid address provided, falling back to "
                     "donation address")
-                state['address'] = self.config['pool_address']
+                state['address'] = self.config['donate_address']
             state['authenticated'] = True
             send_success(msg_id)
             push_difficulty()
