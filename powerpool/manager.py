@@ -1,3 +1,4 @@
+from cryptokit.base58 import get_bcaddress_version
 import yaml
 import argparse
 
@@ -95,7 +96,7 @@ def main():
     # override those defaults with a loaded yaml config
     add_config = yaml.load(args.config) or {}
     config.update(add_config)
-    print(config)
+    logger.debug(config)
 
     # stored state of all greenlets. holds events that can be triggered, etc
     client_states = {}
@@ -140,6 +141,11 @@ def main():
             log = logging.getLogger(key)
             log.addHandler(ch)
             log.setLevel(log_level)
+
+    # check that config has a valid address
+    if not get_bcaddress_version(config['pool_address']) or not get_bcaddress_version(config['donate_address']):
+        logger.error("No valid donation/pool address configured! Exiting.")
+        exit()
 
     net_thread = threading.Thread(target=network_thread, kwargs=gstate)
     net_thread.setDaemon(True)

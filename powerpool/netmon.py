@@ -133,11 +133,10 @@ def monitor_network(client_states, net_state, config):
                     push_new_block()
                 else:
                     # check for new transactions every 15 seconds
-                    if i < 75:
-                        i += 1
-                    else:
+                    if i >= 75:
                         i = 0
                         update_pool(conn)
+                    i += 1
             except Exception:
                 logger.error("Unhandled exception!", exc_info=True)
                 pass
