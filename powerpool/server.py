@@ -9,13 +9,14 @@ from bitcoinrpc.authproxy import JSONRPCException
 from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import BlockTemplate
 from cryptokit import target_from_diff
+from hashlib import sha256
 from gevent import sleep
 from gevent.event import Event
 from gevent.server import StreamServer
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
-from simpledoge.tasks import add_share, add_block, add_one_minute, update_block_state
+from simpledoge.tasks import add_share, add_block, add_one_minute
 
 
 class StratumServer(StreamServer):
@@ -153,7 +154,6 @@ class StratumServer(StreamServer):
                 send_error(22)
                 return False
 
-
             job_target = target_from_diff(self.net_state['difficulty'],
                                           self.config['diff1'])
             valid_job = job.validate_scrypt(header, target=job_target)
@@ -185,12 +185,15 @@ class StratumServer(StreamServer):
                     self.logger.warn(getattr(e, 'error'))
                 else:
                     if res is None:
+                        hash_hex = hexlify(
+                            sha256(sha256(header).digest()).digest()[::-1])
                         add_block.delay(
                             state['address'],
-                            self.net_state['current_height'],
+                            self.net_state['current_height'] + 1,
                             job.total_value,
                             job.fee_total,
-                            hexlify(job.bits))
+                            hexlify(job.bits),
+                            hash_hex)
                         self.logger.info("NEW BLOCK ACCEPTED!!!")
                         self.logger.info("New block at height %i"
                                          % self.net_state['current_height'])
