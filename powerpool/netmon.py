@@ -30,7 +30,7 @@ def monitor_nodes(coinserv, net_state):
             for serv, conn in zip(coinserv, connections):
                 try:
                     conn.getinfo()
-                except (JSONRPCException, socket.error, ValueError):
+                except Exception:
                     if conn in net_state['live_connections']:
                         net_state['live_connections'].remove(conn)
                     if conn not in net_state['down_connections']:
