@@ -1,15 +1,9 @@
-# compiled assets
-static/css/*
-static/js/*
 config.yml
 
 *.py[cod]
 *.swp
 *.swo
 .idea
-node_modules
-application.cfg
-.cake_task_cache
 
 # tmp saves
 *~
@@ -48,7 +42,3 @@ nosetests.xml
 .ropeproject
 .sass-cache
 tags
-
-reload
-uwsgi.pid
-uwsgi.log

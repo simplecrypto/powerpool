@@ -44,7 +44,7 @@ def network_thread(net_state, config, client_states, exit_event):
     logger.info("Network monitor starting up; Thread ID {}"
                 .format(threading.current_thread()))
     network = Greenlet(monitor_network, client_states, net_state, config)
-    nodes = Greenlet(monitor_nodes, config['coinserv'], net_state)
+    nodes = Greenlet(monitor_nodes, config, net_state)
     nodes.start()
     network.start()
     try:
@@ -91,6 +91,9 @@ def main():
                                 'address': '127.0.0.1',
                                 'port': 3855},
                   stat_window=60,
+                  block_poll=0.2,
+                  job_generate_int=0.2,
+                  rpc_ping_int=2,
                   keep_share=600,
                   celery={})
     # override those defaults with a loaded yaml config

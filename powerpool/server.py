@@ -5,7 +5,7 @@ import logging
 from time import time
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
-from bitcoinrpc.authproxy import JSONRPCException
+from bitcoinrpc import CoinRPCException
 from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import BlockTemplate
 from cryptokit import target_from_diff
@@ -179,7 +179,7 @@ class StratumServer(StreamServer):
             for conn in self.net_state['live_connections']:
                 try:
                     res = conn.submitblock(hexlify(block))
-                except (JSONRPCException, socket.error, ValueError) as e:
+                except (CoinRPCException, socket.error, ValueError) as e:
                     self.logger.error("Block failed to submit to the server!",
                                       exc_info=True)
                     self.logger.warn(getattr(e, 'error'))

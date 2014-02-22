@@ -28,6 +28,15 @@ extranonce_size: 4
 # diff
 start_difficulty: 16
 
+# time between checking live rpc for new blocks... lower means less stale
+# shares (in seconds)
+block_poll: 0.2
+# block polls between generating a new job for workers (running gbt, etc)
+# time = block_poll * job_generate_int
+job_generate_int: 75
+# time between pining rpc servers to see if they're up (seconds)
+rpc_ping_int: 2
+
 # a dictionary of configuration values for the stats server
 # this dictionary gets pushed right to Flask. Address and port are 
 # used to configure the wsgi instance it starts

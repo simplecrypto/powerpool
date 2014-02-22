@@ -1,8 +1,8 @@
 import logging
+import bitcoinrpc
 
 from future.utils import viewvalues
 from binascii import unhexlify, hexlify
-from bitcoinrpc.authproxy import AuthServiceProxy
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from gevent import sleep
@@ -13,12 +13,14 @@ from simpledoge.tasks import new_block
 logger = logging.getLogger('netmon')
 
 
-def monitor_nodes(coinserv, net_state):
-    """ Pings rpc interfaces periodically to see if they're up """
+def monitor_nodes(config, net_state):
+    """ Pings rpc interfaces periodically to see if they're up and makes the
+    initial connection to coinservers. """
+    coinserv = config['coinserv']
     try:
         connections = []
         for serv in coinserv:
-            conn = AuthServiceProxy(
+            conn = bitcoinrpc.AuthServiceProxy(
                 "http://{0}:{1}@{2}:{3}/"
                 .format(serv['username'],
                         serv['password'],
@@ -43,7 +45,7 @@ def monitor_nodes(coinserv, net_state):
                                     .format(serv['address']))
                     if conn in net_state['down_connections']:
                         net_state['down_connections'].remove(conn)
-            sleep(2)
+            sleep(config['rpc_ping_int'])
     finally:
         net_state = {}
 
@@ -142,7 +144,7 @@ def monitor_network(client_states, net_state, config):
                     push_new_block()
                 else:
                     # check for new transactions every 15 seconds
-                    if i >= 75:
+                    if i >= config['job_generate_int']:
                         i = 0
                         update_pool(conn)
                     i += 1
@@ -150,7 +152,7 @@ def monitor_network(client_states, net_state, config):
                 logger.error("Unhandled exception!", exc_info=True)
                 pass
 
-            sleep(.2)
+            sleep(config['block_poll'])
 
     finally:
         net_state = {}
