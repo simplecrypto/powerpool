@@ -169,8 +169,6 @@ class StratumServer(StreamServer):
             valid_net = BlockTemplate.validate_scrypt(header, job.bits_target)
             self.net_state['latest_shares'].incr(self.net_state['difficulty'])
             add_share.delay(state['address'], self.net_state['difficulty'])
-            update_block_state.delay()
-            self.logger.info("Updating block states...")
 
             # valid network?
             if not valid_net:
