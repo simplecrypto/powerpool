@@ -2,6 +2,9 @@ from flask import Flask, jsonify, abort
 from gevent import sleep
 
 import logging
+import time
+
+from simpledoge.tasks import add_one_minute
 
 logger = logging.getLogger('stats')
 stats_app = Flask('stats')
@@ -32,7 +35,12 @@ def client(id=None):
 
 
 def stat_rotater(net_state):
+    last_send = (int(time.time()) // 60) * 60
     while True:
         val = net_state['latest_shares'].reset()
         net_state['share_ticks'].append(val)
+        if last_send < int(time.time()) - 60:
+            last_send += 60
+            add_one_minute.delay("pool", sum(net_state['share_ticks']), last_send)
+
         sleep(1)

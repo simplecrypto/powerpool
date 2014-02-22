@@ -1,9 +1,8 @@
-import socket
 import logging
 
 from future.utils import viewvalues
 from binascii import unhexlify, hexlify
-from bitcoinrpc.authproxy import AuthServiceProxy, JSONRPCException
+from bitcoinrpc.authproxy import AuthServiceProxy
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from gevent import sleep
@@ -60,21 +59,27 @@ def monitor_network(client_states, net_state, config):
                 dct['new_block_event'].set()
 
     def update_pool(conn):
-        # request local memory pool and load it in
-        bt = conn.getblocktemplate({'capabilities': [
-            'coinbasevalue',
-            'coinbase/append',
-            'coinbase',
-            'generation',
-            'time',
-            'transactions/remove',
-            'prevblock',
-        ]})
+        try:
+            # request local memory pool and load it in
+            bt = conn.getblocktemplate({'capabilities': [
+                'coinbasevalue',
+                'coinbase/append',
+                'coinbase',
+                'generation',
+                'time',
+                'transactions/remove',
+                'prevblock',
+            ]})
+        except Exception:
+            logger.warn("Failed to fetch new job when attempting, RPC must be "
+                        "down..", exc_info=True)
+            return False
         dirty = 0   # track a change in the transaction pool
         for trans in bt['transactions']:
             if trans['hash'] not in net_state['transactions']:
                 dirty += 1
-                new_trans = Transaction(unhexlify(trans['data']), fees=trans['fee'])
+                new_trans = Transaction(unhexlify(trans['data']),
+                                        fees=trans['fee'])
                 assert trans['hash'] == new_trans.lehexhash
                 net_state['transactions'][trans['hash']] = new_trans
         if dirty or len(net_state['jobs']) == 0:
@@ -127,7 +132,8 @@ def monitor_network(client_states, net_state, config):
 
                 # if there's a new block registered
                 if check_height(conn):
-                    # dump the current transaction pool, refresh and push the event
+                    # dump the current transaction pool, refresh and push the
+                    # event
                     logger.debug("New block announced! Wiping previous jobs...")
                     net_state['transactions'] = {}
                     net_state['jobs'].clear()

@@ -35,3 +35,7 @@ stats_config:
     DEBUG: True
     address: 127.0.0.1
     port: 3855
+
+loggers:
+    - type: StreamHandler
+      level: DEBUG
