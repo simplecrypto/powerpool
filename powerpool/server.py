@@ -15,7 +15,7 @@ from gevent.server import StreamServer
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
-from simpledoge.tasks import add_share, add_block, add_one_minute
+from simpledoge.tasks import add_share, add_block, add_one_minute, update_block_state
 
 
 class StratumServer(StreamServer):
@@ -138,13 +138,22 @@ class StratumServer(StreamServer):
             if not job:
                 # stale job
                 send_error(21)
-                return
+                return False
 
             header = job.block_header(
                 nonce=params[4],
                 extra1=state['id'],
                 extra2=params[2],
                 ntime=params[3])
+
+            # Check a submitted share against previous shares to eliminate duplicates
+            share = (state['id'], params[2], params[4])
+            if share in job.acc_shares:
+                self.logger.warn("Duplicate share!")
+                send_error(22)
+                return False
+
+
             job_target = target_from_diff(self.net_state['difficulty'],
                                           self.config['diff1'])
             valid_job = job.validate_scrypt(header, target=job_target)
@@ -155,9 +164,13 @@ class StratumServer(StreamServer):
 
             send_success(msg_id)
             self.logger.debug("Valid job accepted!")
+            # Add the share to the accepted set
+            job.acc_shares.add(share)
             valid_net = BlockTemplate.validate_scrypt(header, job.bits_target)
             self.net_state['latest_shares'].incr(self.net_state['difficulty'])
             add_share.delay(state['address'], self.net_state['difficulty'])
+            update_block_state.delay()
+            self.logger.info("Updating block states...")
 
             # valid network?
             if not valid_net:

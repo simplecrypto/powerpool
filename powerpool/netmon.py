@@ -96,6 +96,7 @@ def monitor_network(client_states, net_state, config):
                 bt, coinbase, extranonce_length,
                 copy(net_state['transactions'].values()))
             bt_obj.job_id = job_id
+            bt_obj.acc_shares = set()
             net_state['job_counter'] += 1
             net_state['jobs'][job_id] = bt_obj
             net_state['latest_job'] = job_id
