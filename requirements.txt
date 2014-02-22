@@ -1,5 +1,5 @@
 six
-bitcoin-python
+git+https://github.com/icook/python-bitcoinrpc.git
 cryptokit
 gevent
 pyyaml

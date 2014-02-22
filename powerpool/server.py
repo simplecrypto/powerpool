@@ -5,7 +5,7 @@ import logging
 from time import time
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
-from bitcoinrpc.proxy import JSONRPCException
+from bitcoinrpc.authproxy import JSONRPCException
 from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import BlockTemplate
 from cryptokit import target_from_diff
@@ -37,9 +37,9 @@ class StratumServer(StreamServer):
 
     def handle(self, sock, address):
         self.logger.info("Recieving connection from addr {} on sock {}"
-                          .format(address, sock))
+                         .format(address, sock))
         # Seconds before sending keepalive probes
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 10)
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
         # Interval in seconds between keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 1)
         # Failed keepalive probles before declaring other end dead
@@ -55,7 +55,7 @@ class StratumServer(StreamServer):
                  'shares': {},
                  'last_graph_transmit': 0}
         # Warning: Not thread safe in the slightest, should be good for gevent
-        self.id_count += 2
+        self.id_count += 1
         # track the id of the last message recieved
         msg_id = None
 

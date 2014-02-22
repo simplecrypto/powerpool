@@ -3,12 +3,13 @@ import logging
 
 from future.utils import viewvalues
 from binascii import unhexlify, hexlify
-from bitcoinrpc.proxy import AuthServiceProxy, JSONRPCException
+from bitcoinrpc.authproxy import AuthServiceProxy, JSONRPCException
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from gevent import sleep
 from struct import pack
 from copy import copy
+from simpledoge.tasks import new_block
 
 logger = logging.getLogger('netmon')
 
@@ -106,6 +107,7 @@ def monitor_network(client_states, net_state, config):
         height = conn.getblockcount()
         if net_state['current_height'] != height:
             net_state['current_height'] = height
+            new_block.delay(height)
             return True
         return False
 
