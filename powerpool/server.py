@@ -7,7 +7,7 @@ from binascii import hexlify, unhexlify
 from struct import pack, unpack
 from bitcoinrpc import CoinRPCException
 from cryptokit.base58 import get_bcaddress_version
-from cryptokit.block import BlockTemplate
+from cryptokit.block import BlockTemplate, scrypt_int
 from cryptokit import target_from_diff
 from hashlib import sha256
 from gevent import sleep
@@ -156,8 +156,8 @@ class StratumServer(StreamServer):
 
             job_target = target_from_diff(self.net_state['difficulty'],
                                           self.config['diff1'])
-            valid_job = job.validate_scrypt(header, target=job_target)
-            if not valid_job:
+            hash_int = scrypt_int(header)
+            if hash_int >= job_target:
                 self.logger.debug("Low diff share!")
                 send_error(23)
                 return False
@@ -166,12 +166,11 @@ class StratumServer(StreamServer):
             self.logger.debug("Valid job accepted!")
             # Add the share to the accepted set
             job.acc_shares.add(share)
-            valid_net = BlockTemplate.validate_scrypt(header, job.bits_target)
             self.net_state['latest_shares'].incr(self.net_state['difficulty'])
             add_share.delay(state['address'], self.net_state['difficulty'])
 
-            # valid network?
-            if not valid_net:
+            # valid network hash?
+            if hash_int >= job.bits_target:
                 return True
 
             self.logger.log(35, "Valid network block identified!")
