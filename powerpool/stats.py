@@ -3,6 +3,7 @@ from gevent import sleep
 
 import logging
 import time
+import psutil
 
 from simpledoge.tasks import add_one_minute
 
@@ -32,6 +33,24 @@ def client(id=None):
     return jsonify(shares=client['shares'],
                    id=client['id'],
                    address=client['address'])
+
+
+@stats_app.route('/server')
+def server():
+    ret = {}
+    ret.update({"mem_" + key: val for key, val
+                in psutil.virtual_memory().__dict__.iteritems()})
+    ret.update({"cpu_ptime_" + key: val for key, val
+                in psutil.cpu_times_percent().__dict__.iteritems()})
+    ret['cpu_percent'] = psutil.cpu_percent()
+    ret.update({"diskio_" + key: val for key, val
+                in psutil.disk_io_counters().__dict__.iteritems()})
+    ret.update({"disk_" + key: val for key, val
+                in psutil.disk_usage('/').__dict__.iteritems()})
+    users = psutil.get_users()
+    ret['user_count'] = len(users)
+    ret['user_info'] = [(u.name, u.host) for u in users]
+    return jsonify(**ret)
 
 
 def stat_rotater(net_state):

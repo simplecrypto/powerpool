@@ -8,3 +8,4 @@ future
 Flask
 Flask-SQLAlchemy
 simpledoge
+psutil
