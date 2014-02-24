@@ -10,6 +10,8 @@ generation and (bit|lite)coin data structure serialization is performed by
 using GBT for work generation. Currently uses Python 2.7 because Gevent doesn't
 support 3.3, but support for 3.3 will quickly follow Gevent.
 
+Built to power the `SimpleDoge <http://simpledoge.com>`_ mining pool.
+
 **Still very green, not ready for production use by others at this point.**
 
 DogeCoin Donation: D5pS6EBYyGwFv1PDdMUctxp21Q8wCAh3tY
