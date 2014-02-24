@@ -10,7 +10,7 @@ from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import BlockTemplate, scrypt_int
 from cryptokit import target_from_diff
 from hashlib import sha256
-from gevent import sleep
+from gevent import sleep, with_timeout
 from gevent.event import Event
 from gevent.server import StreamServer
 from hashlib import sha1
@@ -279,7 +279,21 @@ class StratumServer(StreamServer):
         try:
 
             while True:
-                line = fp.readline().strip()
+                line = with_timeout(self.config['push_job_interval'],
+                                    fp.readline,
+                                    timeout_value='timeout')
+
+                # push a new job every timeout seconds if requested
+                if line == 'timeout':
+                    self.logger.debug(
+                        "Pushing new job to client {} after timeout"
+                        .format(state['id']))
+                    if state['authenticated'] is True:
+                        push_job(flush=False)
+                    continue
+
+                line = line.strip()
+
                 # if there's data to read, parse it as json
                 if line:
                     try:

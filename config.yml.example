@@ -27,6 +27,8 @@ extranonce_size: 4
 # what difficulty will the server start with? with no vardiff this is static
 # diff
 start_difficulty: 16
+# time between sending latest job to workers when there is no new block
+push_job_interval: 10
 
 # time between checking live rpc for new blocks... lower means less stale
 # shares (in seconds)
@@ -44,6 +46,10 @@ stats_config:
     DEBUG: True
     address: 127.0.0.1
     port: 3855
+
+# celery configuration, passed directly to celery app instance
+celery:
+    CELERY_IMPORTS: ['simpledoge.tasks']
 
 loggers:
     - type: StreamHandler

@@ -77,7 +77,8 @@ def main():
                         help='yaml configuration file to run with')
     args = parser.parse_args()
 
-    # implement some defaults
+    # implement some defaults, these are all explained in the example
+    # configuration file
     config = dict(stratum={'port': 3333, 'address': '127.0.0.1'},
                   coinserv=[],
                   extranonce_serv_size=8,
@@ -95,7 +96,8 @@ def main():
                   job_generate_int=0.2,
                   rpc_ping_int=2,
                   keep_share=600,
-                  celery={})
+                  celery={},
+                  push_job_interval=30)
     # override those defaults with a loaded yaml config
     add_config = yaml.load(args.config) or {}
     config.update(add_config)
