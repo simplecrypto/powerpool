@@ -145,16 +145,16 @@ def monitor_network(client_states, net_state, config):
                     # dump the current transaction pool, refresh and push the
                     # event
                     logger.debug("New block announced! Wiping previous jobs...")
-                    net_state['transactions'] = {}
+                    net_state['transactions'].clear()
                     net_state['jobs'].clear()
                     net_state['latest_job'] = None
-                    update_pool(conn)
-                    bt_obj = push_new_block()
+                    bt_obj = update_pool(conn)
+                    push_new_block()
                     if bt_obj is None:
                         logger.error("None returned from push_new_block after "
                                      "clearning jobs...")
                     else:
-                        new_block.delay(bt_obj.height,
+                        new_block.delay(bt_obj.block_height,
                                         hexlify(bt_obj.bits),
                                         bt_obj.total_value)
                 else:
