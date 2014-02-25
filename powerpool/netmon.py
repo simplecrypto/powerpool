@@ -84,6 +84,7 @@ def monitor_network(client_states, net_state, config):
                                         fees=trans['fee'])
                 assert trans['hash'] == new_trans.lehexhash
                 net_state['transactions'][trans['hash']] = new_trans
+
         if dirty or len(net_state['jobs']) == 0:
             # here we recalculate the current merkle branch and partial
             # coinbases for passing to the mining clients
@@ -103,6 +104,7 @@ def monitor_network(client_states, net_state, config):
                 bt, coinbase, extranonce_length,
                 copy(net_state['transactions'].values()))
             bt_obj.job_id = job_id
+            bt_obj.block_height = bt['height']
             bt_obj.acc_shares = set()
             net_state['job_counter'] += 1
             net_state['jobs'][job_id] = bt_obj
@@ -110,12 +112,18 @@ def monitor_network(client_states, net_state, config):
             logger.debug("Adding {} new transactions to transaction pool, "
                          "created job {}".format(dirty, job_id))
 
+            return bt_obj
+
     def check_height(conn):
         # check the block height
-        height = conn.getblockcount()
+        try:
+            height = conn.getblockcount()
+        except Exception:
+            logger.warn(
+                "Unable to communicate with server that thinks it's live.")
+            return False
         if net_state['current_height'] != height:
             net_state['current_height'] = height
-            new_block.delay(height)
             return True
         return False
 
@@ -141,7 +149,14 @@ def monitor_network(client_states, net_state, config):
                     net_state['jobs'].clear()
                     net_state['latest_job'] = None
                     update_pool(conn)
-                    push_new_block()
+                    bt_obj = push_new_block()
+                    if bt_obj is None:
+                        logger.error("None returned from push_new_block after "
+                                     "clearning jobs...")
+                    else:
+                        new_block.delay(bt_obj.height,
+                                        hexlify(bt_obj.bits),
+                                        bt_obj.total_value)
                 else:
                     # check for new transactions every 15 seconds
                     if i >= config['job_generate_int']:
