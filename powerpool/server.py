@@ -1,6 +1,7 @@
 import json
 import socket
 import logging
+import re
 
 from time import time
 from binascii import hexlify, unhexlify
@@ -246,10 +247,18 @@ class StratumServer(StreamServer):
             if get_bcaddress_version(username):
                 state['address'] = username
             else:
+                filtered = re.sub('[\W_]+', '', username).lower()
                 self.logger.debug(
-                    "Invalid address provided, falling back to "
-                    "donation address")
-                state['address'] = self.config['donate_address']
+                    "Invalid address passed in, checking aliases against {}"
+                    .format(filtered))
+                if filtered in self.config['aliases']:
+                    state['address'] = self.config['aliases'][filtered]
+                    self.logger.debug("Setting address alias to {}"
+                                      .format(state['address']))
+                else:
+                    self.logger.debug("Falling back to donate address {}"
+                                      .format(state['address']))
+                    state['address'] = self.config['donate_address']
             state['authenticated'] = True
             send_success(msg_id)
             push_difficulty()

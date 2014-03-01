@@ -91,6 +91,7 @@ def main():
                   stats_config={'DEBUG': True,
                                 'address': '127.0.0.1',
                                 'port': 3855},
+                  aliases={},
                   stat_window=60,
                   block_poll=0.2,
                   job_generate_int=0.2,
