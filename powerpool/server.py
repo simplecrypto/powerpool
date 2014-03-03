@@ -244,7 +244,12 @@ class StratumServer(StreamServer):
             # if the address they passed is a valid address,
             # use it. Otherwise use the pool address
             username = data.get('params', [None])[0]
-            if get_bcaddress_version(username):
+            try:
+                version = get_bcaddress_version(username)
+            except Exception:
+                version = False
+
+            if version:
                 state['address'] = username
             else:
                 filtered = re.sub('[\W_]+', '', username).lower()
