@@ -55,6 +55,7 @@ class StratumServer(StreamServer):
                  'subscr_difficulty': None,
                  'subscr_notify': None,
                  'shares': {},
+                 'worker': '',
                  'last_graph_transmit': 0}
         # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 1
@@ -234,7 +235,8 @@ class StratumServer(StreamServer):
                     del state['shares'][key]
 
                 for stamp, shares in chunks.iteritems():
-                    add_one_minute.delay(state['address'], shares, stamp)
+                    add_one_minute.delay(state['address'], shares, stamp,
+                                         state['worker'])
                 state['last_graph_transmit'] = upper
 
             state['shares'].setdefault(now, 0)
@@ -243,7 +245,11 @@ class StratumServer(StreamServer):
         def authenticate(data):
             # if the address they passed is a valid address,
             # use it. Otherwise use the pool address
-            username = data.get('params', [None])[0]
+            bits = data.get('params', [None])[0].split('.', 1)
+            username = bits[0]
+            if len(bits) > 1:
+                self.logger.debug("Registering worker name {}".format(bits[1]))
+                state['worker'] = bits[1]
             try:
                 version = get_bcaddress_version(username)
             except Exception:
