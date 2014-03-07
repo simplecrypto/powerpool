@@ -5,10 +5,10 @@ from future.utils import viewvalues
 from binascii import unhexlify, hexlify
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
+from cryptokit import bits_to_difficulty
 from gevent import sleep
 from struct import pack
 from copy import copy
-from simpledoge.tasks import new_block
 
 logger = logging.getLogger('netmon')
 
@@ -50,12 +50,12 @@ def monitor_nodes(config, net_state):
         net_state = {}
 
 
-def monitor_network(client_states, net_state, config):
+def monitor_network(stratum_clients, net_state, config, server_state, celery):
     def push_new_block():
         """ Called when a new block was discovered in the longest blockchain.
         This will dump current jobs, create a new job, and then push the
         new job to all mining clients """
-        for idx, dct in enumerate(viewvalues(client_states)):
+        for idx, dct in enumerate(viewvalues(stratum_clients)):
             if 'new_block_event' in dct:  # ensure they've inited...
                 logger.debug("Signaling new block for client {}".format(idx))
                 dct['new_block_event'].set()
@@ -154,11 +154,12 @@ def monitor_network(client_states, net_state, config):
                         logger.error("None returned from push_new_block after "
                                      "clearning jobs...")
                     else:
-                        new_block.delay(bt_obj.block_height,
-                                        hexlify(bt_obj.bits),
-                                        bt_obj.total_value)
+                        hex_bits = hexlify(bt_obj.bits)
+                        celery.send_task_pp('new_block', bt_obj.block_height, hex_bits, bt_obj.total_value)
+                        net_state['difficulty'] = bits_to_difficulty(hex_bits)
                 else:
-                    # check for new transactions every 15 seconds
+                    # check for new transactions when count intervals have
+                    # passed
                     if i >= config['job_generate_int']:
                         i = 0
                         update_pool(conn)

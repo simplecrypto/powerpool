@@ -1,56 +1,57 @@
 # a list of connections to daemons to get block templates from
 # and submit complete blocks to
 coinserv:
-    - port: 19332
+    - port: 1234
       address: 127.0.0.1
-      username: litecoin
-      password: testing
+      username: ''
+      password: ''
 
 # a valid address that invalid usernames will go towards
 donate_address: ''
 # address that all blocks will go towards in escrow before sending to users
 pool_address: ''
+celery_task_prefix: simpledoge.tasks
 # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
 # sha...
-diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
+#diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
 
 # port and address to listen on for stratum server
-stratum:
-    port: 3333
-    address: 127.0.0.1
+#stratum:
+#    port: 3333
+#    address: 127.0.0.1
 
 # server side size. synonymous with worker id
-extranonce_serv_size: 8
+#extranonce_serv_size: 8
 # size that clients will generate in bytes
-extranonce_size: 4
-
+#extranonce_size: 4
 # what difficulty will the server start with? with no vardiff this is static
 # diff
-start_difficulty: 16
+#start_difficulty: 16
 # time between sending latest job to workers when there is no new block
-push_job_interval: 10
+#push_job_interval: 30
 
 # time between checking live rpc for new blocks... lower means less stale
 # shares (in seconds)
-block_poll: 0.2
+#block_poll: 0.2
 # block polls between generating a new job for workers (running gbt, etc)
 # time = block_poll * job_generate_int
-job_generate_int: 75
-# time between pining rpc servers to see if they're up (seconds)
-rpc_ping_int: 2
+#job_generate_int: 75
+#rpc_ping_int: 2
 
 # a dictionary of configuration values for the stats server
 # this dictionary gets pushed right to Flask. Address and port are 
 # used to configure the wsgi instance it starts
-stats_config:
-    DEBUG: True
-    address: 127.0.0.1
-    port: 3855
+#stats_config:
+#    enabled: True
+#    DEBUG: True
+#    address: 127.0.0.1
+#    port: 3855
 
-# celery configuration, passed directly to celery app instance
 celery:
     CELERY_IMPORTS: ['simpledoge.tasks']
 
-loggers:
-    - type: StreamHandler
-      level: DEBUG
+# Configures standard python loggers. type must be a logging handler provided
+# by python std lib. Future support for custom loggers would be great
+#loggers:
+#    - type: StreamHandler
+#      level: DEBUG
