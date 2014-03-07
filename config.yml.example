@@ -41,7 +41,7 @@ celery_task_prefix: simpledoge.tasks
 # a dictionary of configuration values for the stats server
 # this dictionary gets pushed right to Flask. Address and port are 
 # used to configure the wsgi instance it starts
-#stats_config:
+#monitor_config:
 #    enabled: True
 #    DEBUG: True
 #    address: 127.0.0.1

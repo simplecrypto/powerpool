@@ -24,15 +24,15 @@ logger = logging.getLogger('manager')
 
 
 def monitor_runner(net_state, config, stratum_clients, server_state, exit_event):
-    logger.info("Stats server starting up; Thread ID {}"
+    logger.info("Monitor server starting up; Thread ID {}"
                 .format(threading.current_thread()))
-    monitor_app.config.update(config['stats_config'])
+    monitor_app.config.update(config['monitor_config'])
     monitor_app.config.update(dict(net_state=net_state,
                                    config=config,
                                    stratum_clients=stratum_clients,
                                    server_state=server_state))
-    wsgiserver = WSGIServer((config['stats_config']['address'],
-                             config['stats_config']['port']), monitor_app)
+    wsgiserver = WSGIServer((config['monitor_config']['address'],
+                             config['monitor_config']['port']), monitor_app)
     wsgiserver.start()
     try:
         exit_event.wait()
@@ -42,10 +42,12 @@ def monitor_runner(net_state, config, stratum_clients, server_state, exit_event)
 
 
 def stat_runner(server_state, celery, exit_event):
+    logger.info("Stat manager starting up; Thread ID {}"
+                .format(threading.current_thread()))
     # a simple greenlet that rotates some of the servers stats
     rotater = Greenlet.spawn(stat_rotater, server_state, celery)
     try:
-        rotater.join()
+        exit_event.wait()
     finally:
         logger.info("Stat manager shutting down...")
         rotater.kill()
@@ -104,10 +106,10 @@ def main():
                             'level': 'DEBUG'}],
                   start_difficulty=16,
                   term_timeout=3,
-                  stats_config={'DEBUG': True,
-                                'address': '127.0.0.1',
-                                'port': 3855,
-                                'enabled': True},
+                  monitor_config={'DEBUG': True,
+                                  'address': '127.0.0.1',
+                                  'port': 3855,
+                                  'enabled': True},
                   aliases={},
                   stat_window=60,
                   block_poll=0.2,
@@ -174,7 +176,7 @@ def main():
         ch = getattr(logging, log_cfg['type'])()
         log_level = getattr(logging, log_cfg['level'].upper())
         ch.setLevel(log_level)
-        fmt = log_cfg.get('format', '%(asctime)s [%(levelname)s] %(message)s')
+        fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
         formatter = logging.Formatter(fmt)
         ch.setFormatter(formatter)
         keys = log_cfg.get('listen',
@@ -224,12 +226,12 @@ def main():
 
     # the monitor server. a simple flask http server that lets you view
     # internal data structures to monitor server health
-    if config['stats_config']['enabled']:
-        stat_thread = threading.Thread(target=monitor_runner, args=(
+    if config['monitor_config']['enabled']:
+        monitor_thread = threading.Thread(target=monitor_runner, args=(
             net_state, config, stratum_clients, server_state, exit_event))
-        stat_thread.daemon = True
-        threads.append(stat_thread)
-        stat_thread.start()
+        monitor_thread.daemon = True
+        threads.append(monitor_thread)
+        monitor_thread.start()
 
     try:
         while True:
