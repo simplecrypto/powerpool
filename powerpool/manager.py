@@ -106,7 +106,7 @@ def main():
                             'level': 'DEBUG'}],
                   start_difficulty=16,
                   term_timeout=3,
-                  monitor_config={'DEBUG': True,
+                  monitor_config={'DEBUG': False,
                                   'address': '127.0.0.1',
                                   'port': 3855,
                                   'enabled': True},
