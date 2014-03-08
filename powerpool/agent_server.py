@@ -50,7 +50,7 @@ class AgentServer(GenericServer):
             # flags for current connection state
             'authenticated': False,
             'client_state': None,
-            'authed': [],
+            'authed': {},
             'client_version': None,
             'id': self.id_count,
         }
@@ -122,7 +122,7 @@ class AgentServer(GenericServer):
                             send_error(31)
 
                         # here's where we do some top security checking...
-                        state['authed'].append(username)
+                        state['authed'][username] = user_worker
                         send_success()
                     elif meth == "stats.submit":
                         if state['client_version'] is None:
@@ -138,10 +138,13 @@ class AgentServer(GenericServer):
                             continue
 
                         worker_addr, typ, data = data['params']
-                        user, worker = worker_addr.split('.', 1)
+                        user, worker = state['authed'][worker_addr]
                         if typ == "status":
                             self.celery.send_task_pp(
                                 'update_status', user, worker, data)
+                            send_success()
+                        else:
+                            send_error(35)
                 else:
                     self.logger.info("Unkown action for command {}"
                                      .format(data))
