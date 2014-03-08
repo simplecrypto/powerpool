@@ -13,9 +13,11 @@ patch_thread(threading=False, _threading_local=False, Event=True)
 import threading
 import logging
 from celery import Celery
+from pprint import pformat
 
 from .netmon import monitor_network, monitor_nodes
 from .stratum_server import StratumServer
+from .agent_server import AgentServer
 from .stats import stat_rotater
 from .monitor import monitor_app
 
@@ -68,6 +70,25 @@ def net_runner(net_state, config, stratum_clients, server_state, celery,
         logger.info("Network monitor thread shutting down...")
 
 
+def agent_runner(config, stratum_clients, agent_clients, celery, exit_event):
+    # start the stratum server reactor thread
+    logger.info("Agent server starting up; Thread ID {}"
+                .format(threading.current_thread()))
+    sserver = AgentServer(
+        (config['agent_config']['address'], config['agent_config']['port']),
+        stratum_clients,
+        config,
+        agent_clients,
+        celery,
+        spawn=10000)
+    sserver.start()
+    try:
+        exit_event.wait()
+    finally:
+        logger.info("Agent server shutting down...")
+        Greenlet.spawn(sserver.stop, timeout=None).join()
+
+
 def stratum_runner(net_state, config, stratum_clients, server_state, celery,
                    exit_event):
     # start the stratum server reactor thread
@@ -97,7 +118,7 @@ def main():
 
     # implement some defaults, these are all explained in the example
     # configuration file
-    config = dict(stratum={'port': 3333, 'address': '127.0.0.1'},
+    config = dict(stratum={'port': 3333, 'address': '0.0.0.0'},
                   coinserv=[],
                   extranonce_serv_size=8,
                   extranonce_size=4,
@@ -110,6 +131,9 @@ def main():
                                   'address': '127.0.0.1',
                                   'port': 3855,
                                   'enabled': True},
+                  agent_config={'address': '0.0.0.0',
+                                'port': 4444,
+                                'enabled': False},
                   aliases={},
                   stat_window=60,
                   block_poll=0.2,
@@ -132,7 +156,6 @@ def main():
                 d[k] = u[k]
         return d
     update(config, add_config)
-    logger.debug(config)
 
     # setup our celery agent
     celery = Celery()
@@ -145,6 +168,11 @@ def main():
 
     # stored state of all greenlets. holds events that can be triggered, etc
     stratum_clients = {'user_worker_lut': {}}
+
+    # all the agent connections
+    agent_clients = {}
+
+    # the network monitor stores the current coin network state here
     net_state = {
         # rpc connections in either state
         'live_connections': [],
@@ -157,6 +185,7 @@ def main():
         # index of all jobs currently accepting work. Contains complete
         # block templates
         'jobs': {},
+        # the job that should be sent to clients needing work
         'latest_job': None,
         'job_counter': 0,
         'difficulty': -1,
@@ -179,12 +208,14 @@ def main():
         fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
         formatter = logging.Formatter(fmt)
         ch.setFormatter(formatter)
-        keys = log_cfg.get('listen',
-                           ['stats', 'stratum_server', 'netmon', 'manager', 'monitor'])
+        keys = log_cfg.get('listen', ['stats', 'stratum_server', 'netmon',
+                                      'manager', 'monitor', 'agent'])
         for key in keys:
             log = logging.getLogger(key)
             log.addHandler(ch)
             log.setLevel(log_level)
+
+    logger.debug(pformat(config))
 
     # check that config has a valid address
     if (not get_bcaddress_version(config['pool_address']) or
@@ -223,6 +254,15 @@ def main():
     stat_thread.daemon = True
     threads.append(stat_thread)
     stat_thread.start()
+
+    # the agent server. allows peers to connect and send stat data about
+    # a stratum worker
+    if config['agent_config']['enabled']:
+        agent_thread = threading.Thread(target=agent_runner, args=(
+            config, stratum_clients, agent_clients, celery, exit_event))
+        agent_thread.daemon = True
+        threads.append(agent_thread)
+        agent_thread.start()
 
     # the monitor server. a simple flask http server that lets you view
     # internal data structures to monitor server health

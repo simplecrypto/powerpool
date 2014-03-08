@@ -18,7 +18,7 @@ celery_task_prefix: simpledoge.tasks
 # port and address to listen on for stratum server
 #stratum:
 #    port: 3333
-#    address: 127.0.0.1
+#    address: 0.0.0.0
 
 # server side size. synonymous with worker id
 #extranonce_serv_size: 8
@@ -46,6 +46,13 @@ celery_task_prefix: simpledoge.tasks
 #    DEBUG: True
 #    address: 127.0.0.1
 #    port: 3855
+
+# the agent server allows data collection agents to connect and report stats
+# about stratum clients. disabled by default
+#agent_config:
+#    enabled: False
+#    address: 0.0.0.0
+#    port: 4444
 
 celery:
     CELERY_IMPORTS: ['simpledoge.tasks']

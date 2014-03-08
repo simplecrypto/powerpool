@@ -8,11 +8,28 @@ from .server import GenericServer
 
 
 class AgentServer(GenericServer):
-    logger = logging.getLogger('agent_server')
+    logger = logging.getLogger('agent')
 
-    def __init__(self, *args, **kwargs):
-        GenericServer.__init__(self, **kwargs)
-        self.agent_states = {}
+    errors = {
+        20: 'Other/Unknown',
+        25: 'Not subscribed',
+        30: 'Unkown command',
+        31: 'Worker not connected',
+        32: 'Already associated',
+        33: 'No hello exchanged',
+        34: 'Worker not authed',
+        35: 'Type not accepted',
+        36: 'Invalid format for method',
+    }
+
+    def __init__(self, listener, stratum_clients, config, agent_clients,
+                 celery, **kwargs):
+        super(GenericServer, self).__init__(listener, **kwargs)
+        self.stratum_clients = stratum_clients
+        self.agent_clients = agent_clients
+        self.config = config
+        self.celery = celery
+        self.id_count = 0
 
     def task_exc(self, name, *args, **kwargs):
         self.net_state['celery'].send_task(
@@ -32,9 +49,29 @@ class AgentServer(GenericServer):
         state = {
             # flags for current connection state
             'authenticated': False,
+            'client_state': None,
+            'authed': [],
+            'client_version': None,
+            'id': self.id_count,
         }
-        # track the id of the last message recieved for replying
-        msg_id = None
+        # Warning: Not thread safe in the slightest, should be good for gevent
+        self.id_count += 1
+
+        def send_error(num=20):
+            """ Utility for transmitting an error to the client """
+            err = {'result': None, 'error': (num, self.errors[num], None)}
+            self.logger.debug("error response: {}".format(err))
+            fp.write(json.dumps(err, separators=(',', ':')) + "\n")
+            fp.flush()
+
+        def send_success():
+            """ Utility for transmitting success to the client """
+            succ = {'result': True, 'error': None}
+            self.logger.debug("success response: {}".format(succ))
+            fp.write(json.dumps(succ, separators=(',', ':')) + "\n")
+            fp.flush()
+
+        self.agent_clients[state['id']] = state
 
         # do a finally call to cleanup when we exit
         try:
@@ -51,7 +88,63 @@ class AgentServer(GenericServer):
 
                 # if there's data to read, parse it as json
                 if line:
-                    self.logger.debug(line)
+                    try:
+                        data = json.loads(line)
+                    except ValueError:
+                        self.logger.debug("Data {} not JSON".format(line))
+                        send_error()
+                        continue
+                else:
+                    send_error()
+                    sleep(1)
+                    continue
+
+                self.logger.debug("Data {} recieved on client {}"
+                                  .format(data, state['id']))
+
+                if 'method' in data:
+                    meth = data['method'].lower()
+                    if meth == 'hello':
+                        if state['client_version'] is not None:
+                            send_error(32)
+                            continue
+
+                        state['client_version'] = data.get('params', [0.1])[0]
+                    elif meth == 'worker.authenticate':
+                        if state['client_version'] is None:
+                            send_error(33)
+                            continue
+                        username = data.get('params', [""])[0]
+                        user_worker = self.convert_username(username)
+                        # setup lookup table for easier access from other read sources
+                        state['client_state'] = self.stratum_clients['user_worker_lut'].get(user_worker)
+                        if not state['client_state']:
+                            send_error(31)
+
+                        # here's where we do some top security checking...
+                        state['authed'].append(username)
+                        send_success()
+                    elif meth == "stats.submit":
+                        if state['client_version'] is None:
+                            send_error(33)
+                            continue
+
+                        if data.get('params', [''])[0] not in state['authed']:
+                            send_error(34)
+                            continue
+
+                        if 'params' not in data or len(data['params']) != 3:
+                            send_error(36)
+                            continue
+
+                        worker_addr, typ, data = data['params']
+                        user, worker = worker_addr.split('.', 1)
+                        if typ == "status":
+                            self.celery.send_task_pp(
+                                'update_status', user, worker, data)
+                else:
+                    self.logger.info("Unkown action for command {}"
+                                     .format(data))
                     send_error()
 
             sock.shutdown(socket.SHUT_WR)
@@ -61,6 +154,11 @@ class AgentServer(GenericServer):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            del self.agent_clients[state['id']]
+            if state['client_state']:
+                try:
+                    del self.agent_clients[state['id']]
+                except KeyError:
+                    pass
 
-        self.logger.info("Closing connection for client {}".format(state['id']))
+        self.logger.info("Closing agent connection for client {}"
+                         .format(state['id']))

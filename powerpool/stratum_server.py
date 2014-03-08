@@ -1,13 +1,11 @@
 import json
 import socket
 import logging
-import re
 
 from time import time
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
 from bitcoinrpc import CoinRPCException
-from cryptokit.base58 import get_bcaddress_version
 from cryptokit.block import scrypt_int
 from cryptokit import target_from_diff
 from hashlib import sha256
@@ -51,37 +49,15 @@ class StratumServer(GenericServer):
         VALID_SHARE: 'valid_shares'
     }
 
-    def __init__(self, *args, **kwargs):
-        GenericServer.__init__(self, *args, **kwargs)
-
-    def convert_username(self, username):
-        # if the address they passed is a valid address,
-        # use it. Otherwise use the pool address
-        bits = username.split('.', 1)
-        username = bits[0]
-        if len(bits) > 1:
-            self.logger.debug("Registering worker name {}".format(bits[1]))
-            worker = bits[1][:16]
-        try:
-            version = get_bcaddress_version(username)
-        except Exception:
-            version = False
-
-        if version:
-            address = username
-        else:
-            filtered = re.sub('[\W_]+', '', username).lower()
-            self.logger.debug(
-                "Invalid address passed in, checking aliases against {}"
-                .format(filtered))
-            if filtered in self.config['aliases']:
-                address = self.config['aliases'][filtered]
-                self.logger.debug("Setting address alias to {}".format(address))
-            else:
-                address = self.config['donate_address']
-                self.logger.debug("Falling back to donate address {}".format(address))
-
-        return address, worker
+    def __init__(self, listener, stratum_clients, config, net_state,
+                 server_state, celery, **kwargs):
+        super(GenericServer, self).__init__(listener, **kwargs)
+        self.stratum_clients = stratum_clients
+        self.config = config
+        self.net_state = net_state
+        self.server_state = server_state
+        self.celery = celery
+        self.id_count = 0
 
     def handle(self, sock, address):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
@@ -319,7 +295,11 @@ class StratumServer(GenericServer):
 
         def authenticate(data):
             username = data.get('params', [None])[0]
-            state['address'], state['worker'] = self.convert_username(username)
+            user_worker = self.convert_username(username)
+            # setup lookup table for easier access from other read sources
+            self.stratum_clients['user_worker_lut'][user_worker] = state
+            # unpack into state dictionary
+            state['address'], state['worker'] = user_worker
             state['authenticated'] = True
             send_success(msg_id)
             push_difficulty()
@@ -372,7 +352,6 @@ class StratumServer(GenericServer):
                         self.logger.debug("Data {} not JSON".format(line))
                         send_error()
                         continue
-                # ignore empty strings sent
                 else:
                     send_error()
                     sleep(1)
@@ -421,5 +400,10 @@ class StratumServer(GenericServer):
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
             del self.stratum_clients[state['id']]
+            try:
+                addr_worker = (state['address'], state['worker'])
+                del self.stratum_clients['user_worker_lut'][addr_worker]
+            except KeyError:
+                pass
 
         self.logger.info("Closing connection for client {}".format(state['id']))
