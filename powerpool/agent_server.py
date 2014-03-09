@@ -139,11 +139,12 @@ class AgentServer(GenericServer):
                             send_error(36)
                             continue
 
-                        worker_addr, typ, data, stamp = data['params']
-                        user, worker = state['authed'][worker_addr]
-                        if typ == "status":
+                        user_worker, typ, data, stamp = data['params']
+                        # lookup our authed usernames translated creds
+                        address, worker = state['authed'][user_worker]
+                        if typ in self.config['agent']['accepted_types']:
                             self.celery.send_task_pp(
-                                'update_status', user, worker, data, stamp)
+                                'agent_receive', address, worker, typ, data, stamp)
                             send_success()
                         else:
                             send_error(35)

@@ -58,6 +58,10 @@ celery_task_prefix: simpledoge.tasks
 #    enabled: False
 #    address: 0.0.0.0
 #    port: 4444
+#    accepted_types:
+#       - temp
+#       - status
+#       - hashrate
 
 # this defines the celery options that get passed to the daemon. this should
 # define how to connect to the queue server, etc
