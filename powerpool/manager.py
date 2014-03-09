@@ -83,8 +83,7 @@ def agent_runner(config, stratum_clients, agent_clients, server_state, celery,
         config,
         agent_clients,
         server_state,
-        celery,
-        spawn=10000)
+        celery)
     sserver.start()
     try:
         exit_event.wait()
@@ -104,8 +103,7 @@ def stratum_runner(net_state, config, stratum_clients, server_state, celery,
         config,
         net_state,
         server_state,
-        celery,
-        spawn=10000)
+        celery)
     sserver.start()
     try:
         exit_event.wait()

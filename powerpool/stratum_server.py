@@ -62,7 +62,6 @@ class StratumServer(GenericServer):
     def handle(self, sock, address):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
                          .format(address, sock))
-        print
         self.server_state['stratum_connects'].incr()
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
