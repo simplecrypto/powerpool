@@ -43,7 +43,7 @@ celery_task_prefix: simpledoge.tasks
 # used to configure the wsgi instance it starts
 #monitor_config:
 #    enabled: True
-#    DEBUG: True
+#    DEBUG: False
 #    address: 127.0.0.1
 #    port: 3855
 

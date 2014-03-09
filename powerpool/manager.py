@@ -1,9 +1,9 @@
 import yaml
 import argparse
 import collections
+import datetime
 
 from cryptokit.base58 import get_bcaddress_version
-from collections import deque
 from gevent import Greenlet
 from gevent.monkey import patch_all, patch_thread
 from gevent.wsgi import WSGIServer
@@ -18,20 +18,22 @@ from pprint import pformat
 from .netmon import monitor_network, monitor_nodes
 from .stratum_server import StratumServer
 from .agent_server import AgentServer
-from .stats import stat_rotater
+from .stats import stat_rotater, StatManager
 from .monitor import monitor_app
 
 
 logger = logging.getLogger('manager')
 
 
-def monitor_runner(net_state, config, stratum_clients, server_state, exit_event):
+def monitor_runner(net_state, config, stratum_clients, server_state,
+                   agent_clients, exit_event):
     logger.info("Monitor server starting up; Thread ID {}"
                 .format(threading.current_thread()))
     monitor_app.config.update(config['monitor_config'])
     monitor_app.config.update(dict(net_state=net_state,
                                    config=config,
                                    stratum_clients=stratum_clients,
+                                   agent_clients=agent_clients,
                                    server_state=server_state))
     wsgiserver = WSGIServer((config['monitor_config']['address'],
                              config['monitor_config']['port']), monitor_app)
@@ -70,7 +72,8 @@ def net_runner(net_state, config, stratum_clients, server_state, celery,
         logger.info("Network monitor thread shutting down...")
 
 
-def agent_runner(config, stratum_clients, agent_clients, celery, exit_event):
+def agent_runner(config, stratum_clients, agent_clients, server_state, celery,
+                 exit_event):
     # start the stratum server reactor thread
     logger.info("Agent server starting up; Thread ID {}"
                 .format(threading.current_thread()))
@@ -79,6 +82,7 @@ def agent_runner(config, stratum_clients, agent_clients, celery, exit_event):
         stratum_clients,
         config,
         agent_clients,
+        server_state,
         celery,
         spawn=10000)
     sserver.start()
@@ -135,7 +139,6 @@ def main():
                                 'port': 4444,
                                 'enabled': False},
                   aliases={},
-                  stat_window=60,
                   block_poll=0.2,
                   job_generate_int=75,
                   rpc_ping_int=2,
@@ -167,7 +170,7 @@ def main():
     Celery.send_task_pp = send_task_pp
 
     # stored state of all greenlets. holds events that can be triggered, etc
-    stratum_clients = {'user_worker_lut': {}}
+    stratum_clients = {'addr_worker_lut': {}, 'address_lut': {}}
 
     # all the agent connections
     agent_clients = {}
@@ -193,10 +196,16 @@ def main():
 
     # holds counters, timers, etc that have to do with overall server state
     server_state = {
-        # stat tracking of shares
-        'share_ticks': deque([], config['stat_window']),
-        'latest_shares': SafeIterator(),
+        'server_start': datetime.datetime.utcnow(),
         'block_solve': None,
+        'shares': StatManager(),
+        'reject_low': StatManager(),
+        'reject_dup': StatManager(),
+        'reject_stale': StatManager(),
+        'stratum_connects': StatManager(),
+        'stratum_disconnects': StatManager(),
+        'agent_connects': StatManager(),
+        'agent_disconnects': StatManager(),
     }
 
     exit_event = threading.Event()
@@ -259,7 +268,8 @@ def main():
     # a stratum worker
     if config['agent_config']['enabled']:
         agent_thread = threading.Thread(target=agent_runner, args=(
-            config, stratum_clients, agent_clients, celery, exit_event))
+            config, stratum_clients, agent_clients, server_state, celery,
+            exit_event))
         agent_thread.daemon = True
         threads.append(agent_thread)
         agent_thread.start()
@@ -268,7 +278,8 @@ def main():
     # internal data structures to monitor server health
     if config['monitor_config']['enabled']:
         monitor_thread = threading.Thread(target=monitor_runner, args=(
-            net_state, config, stratum_clients, server_state, exit_event))
+            net_state, config, stratum_clients, server_state, agent_clients,
+            exit_event))
         monitor_thread.daemon = True
         threads.append(monitor_thread)
         monitor_thread.start()
@@ -288,20 +299,3 @@ def main():
                 logger.info("Cleanup complete, shutting down...")
         except KeyboardInterrupt:
             logger.info("Shutdown forced by system, exiting without cleanup")
-
-
-class SafeIterator(object):
-    def __init__(self):
-        self._val = 0
-        self.lock = threading.Lock()
-
-    def incr(self, amount):
-        with self.lock:
-            self._val += amount
-    __add__ = incr
-
-    def reset(self):
-        with self.lock:
-            curr = self._val
-            self._val = 0
-            return curr

@@ -23,11 +23,12 @@ class AgentServer(GenericServer):
     }
 
     def __init__(self, listener, stratum_clients, config, agent_clients,
-                 celery, **kwargs):
+                 server_state, celery, **kwargs):
         super(GenericServer, self).__init__(listener, **kwargs)
         self.stratum_clients = stratum_clients
         self.agent_clients = agent_clients
         self.config = config
+        self.server_state = server_state
         self.celery = celery
         self.id_count = 0
 
@@ -38,6 +39,7 @@ class AgentServer(GenericServer):
     def handle(self, sock, address):
         self.logger.info("Recieving agent connection from addr {} on sock {}"
                          .format(address, sock))
+        self.server_state['agent_connects'].incr()
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
         # Interval in seconds between keepalive probes
@@ -117,7 +119,7 @@ class AgentServer(GenericServer):
                         username = data.get('params', [""])[0]
                         user_worker = self.convert_username(username)
                         # setup lookup table for easier access from other read sources
-                        state['client_state'] = self.stratum_clients['user_worker_lut'].get(user_worker)
+                        state['client_state'] = self.stratum_clients['addr_worker_lut'].get(user_worker)
                         if not state['client_state']:
                             send_error(31)
 
@@ -157,6 +159,7 @@ class AgentServer(GenericServer):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            self.server_state['agent_disconnects'].incr()
             if state['client_state']:
                 try:
                     del self.agent_clients[state['id']]

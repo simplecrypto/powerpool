@@ -62,6 +62,8 @@ class StratumServer(GenericServer):
     def handle(self, sock, address):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
                          .format(address, sock))
+        print
+        self.server_state['stratum_connects'].incr()
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
         # Interval in seconds between keepalive probes
@@ -72,6 +74,7 @@ class StratumServer(GenericServer):
         # create a dictionary to track our
         state = {
             # flags for current connection state
+            'peer_name': sock.getpeername(),
             'authenticated': False,
             'subscribed': False,
             'address': None,
@@ -182,6 +185,7 @@ class StratumServer(GenericServer):
             if not job:
                 # stale job
                 send_error(self.STALE_SHARE)
+                self.server_state['reject_stale'].incr(state['difficulty'])
                 return self.STALE_SHARE
 
             header = job.block_header(
@@ -196,6 +200,7 @@ class StratumServer(GenericServer):
             if share in job.acc_shares:
                 self.logger.info("Duplicate share!")
                 send_error(self.DUP_SHARE)
+                self.server_state['reject_dup'].incr(state['difficulty'])
                 return self.DUP_SHARE
 
             job_target = target_from_diff(state['difficulty'],
@@ -204,6 +209,7 @@ class StratumServer(GenericServer):
             if hash_int >= job_target:
                 self.logger.debug("Low diff share!")
                 send_error(self.LOW_DIFF)
+                self.server_state['reject_low'].incr(state['difficulty'])
                 return self.LOW_DIFF
 
             # we want to send an ack ASAP, so do it here
@@ -211,7 +217,7 @@ class StratumServer(GenericServer):
             self.logger.debug("Valid job accepted!")
             # Add the share to the accepted set to check for dups
             job.acc_shares.add(share)
-            self.server_state['latest_shares'].incr(state['difficulty'])
+            self.server_state['shares'].incr(state['difficulty'])
             self.celery.send_task_pp('add_share', state['address'], state['difficulty'])
 
             # valid network hash?
@@ -297,7 +303,9 @@ class StratumServer(GenericServer):
             username = data.get('params', [None])[0]
             user_worker = self.convert_username(username)
             # setup lookup table for easier access from other read sources
-            self.stratum_clients['user_worker_lut'][user_worker] = state
+            self.stratum_clients['addr_worker_lut'][user_worker] = state
+            self.stratum_clients['address_lut'].setdefault(user_worker[0], [])
+            self.stratum_clients['address_lut'][user_worker[0]].append(state)
             # unpack into state dictionary
             state['address'], state['worker'] = user_worker
             state['authenticated'] = True
@@ -399,11 +407,21 @@ class StratumServer(GenericServer):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            self.server_state['stratum_disconnects'].incr()
             del self.stratum_clients[state['id']]
+            addr_worker = (state['address'], state['worker'])
+            # clear the worker from the luts
             try:
-                addr_worker = (state['address'], state['worker'])
-                del self.stratum_clients['user_worker_lut'][addr_worker]
+                del self.stratum_clients['addr_worker_lut'][addr_worker]
             except KeyError:
+                pass
+            try:
+                # remove from lut for address
+                self.stratum_clients['address_lut'][state['address']].remove(state)
+                # delete the list if its empty
+                if not len(self.stratum_clients['address_lut'][state['address']]):
+                    del self.stratum_clients['address_lut'][state['address']]
+            except (ValueError, KeyError):
                 pass
 
         self.logger.info("Closing connection for client {}".format(state['id']))

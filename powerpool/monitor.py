@@ -1,7 +1,12 @@
 from flask import Flask, jsonify, abort
+from itertools import chain
+from collections import deque
 
 import logging
+import sys
 import psutil
+import datetime
+import resource
 
 
 logger = logging.getLogger('monitor')
@@ -13,28 +18,90 @@ cpu_times = (None, None)
 def general():
     net_state = monitor_app.config['net_state']
     stratum_clients = monitor_app.config['stratum_clients']
+    agent_clients = monitor_app.config['agent_clients']
     server_state = monitor_app.config['server_state']
-    shares = sum(server_state['share_ticks'])
-    mhr = ((2 ** 16) * shares) / 1000000 / 60.0
-    return jsonify(clients=len(stratum_clients),
+
+    share_summary = server_state['shares'].summary()
+    share_summary['megahashpersec'] = ((2 ** 16) * share_summary['min_total']) / 1000000 / 60.0
+    return jsonify(stratum_clients=len(stratum_clients) - 2,
+                   server_start=str(server_state['server_start']),
+                   uptime=str(datetime.datetime.utcnow() - server_state['server_start']),
+                   agent_clients=len(agent_clients),
                    current_height=net_state['current_height'],
                    difficulty=net_state['difficulty'],
                    jobs=len(net_state['jobs']),
-                   megahashpersec=mhr,
-                   oneminshares=shares,
+                   shares=share_summary,
+                   reject_dup=server_state['reject_dup'].summary(),
+                   reject_low=server_state['reject_low'].summary(),
+                   reject_stale=server_state['reject_stale'].summary(),
+                   agent_disconnects=server_state['agent_disconnects'].summary(),
+                   agent_connects=server_state['agent_connects'].summary(),
+                   stratum_disconnects=server_state['stratum_disconnects'].summary(),
+                   stratum_connects=server_state['stratum_connects'].summary(),
                    block_solve=server_state['block_solve'])
 
 
-@monitor_app.route('/client/<id>')
-def client(id=None):
+keys = ['dup_shares', 'stale_shares', 'low_diff_shares', 'peer_name', 'worker',
+        'valid_shares']
+
+
+def format_stratum(client):
+    global keys
+    return {key: value for key, value in client.iteritems() if key in keys}
+
+
+@monitor_app.route('/client/<address>')
+def client(address=None):
     try:
-        client = monitor_app.config['stratum_clients'][id]
+        clients = monitor_app.config['stratum_clients']['address_lut'][address]
     except KeyError:
         abort(404)
 
-    return jsonify(shares=client['shares'],
-                   id=client['id'],
-                   address=client['address'])
+    return jsonify(**{address: [format_stratum(client) for client in clients]})
+
+
+@monitor_app.route('/clients')
+def clients():
+    lut = monitor_app.config['stratum_clients']['address_lut']
+    clients = {key: [format_stratum(item) for item in value]
+               for key, value in lut.iteritems()}
+
+    return jsonify(clients=clients)
+
+
+@monitor_app.route('/memory')
+def memory():
+    def total_size(o, handlers={}):
+        dict_handler = lambda d: chain.from_iterable(d.items())
+        all_handlers = {tuple: iter,
+                        list: iter,
+                        deque: iter,
+                        dict: dict_handler,
+                        set: iter,
+                        frozenset: iter,
+                        }
+        all_handlers.update(handlers)     # user handlers take precedence
+        seen = set()                      # track which object id's have already been seen
+        default_size = sys.getsizeof(0)       # estimate sizeof object without __sizeof__
+
+        def sizeof(o):
+            if id(o) in seen:       # do not double count the same object
+                return 0
+            seen.add(id(o))
+            s = sys.getsizeof(o, default_size)
+
+            for typ, handler in all_handlers.items():
+                if isinstance(o, typ):
+                    s += sum(map(sizeof, handler(o)))
+                    break
+            return s
+
+        return sizeof(o)
+
+    keys = ['net_state', 'stratum_clients', 'agent_clients', 'server_state']
+    out = {key: sys.getsizeof(monitor_app.config[key]) for key in keys}
+    out['total'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return jsonify(**out)
 
 
 @monitor_app.route('/server')
