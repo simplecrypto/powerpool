@@ -14,6 +14,7 @@ class GenericServer(StreamServer):
         # use it. Otherwise use the pool address
         bits = username.split('.', 1)
         username = bits[0]
+        worker = ''
         if len(bits) > 1:
             self.logger.debug("Registering worker name {}".format(bits[1]))
             worker = bits[1][:16]
