@@ -38,10 +38,15 @@ celery_task_prefix: simpledoge.tasks
 #job_generate_int: 75
 #rpc_ping_int: 2
 
+# aliases allow you to automatically translate a friendly username to to a
+# predefined address. the donate address is similar, except that any invalid
+# address is translated to it
+#aliases: {}
+
 # a dictionary of configuration values for the stats server
 # this dictionary gets pushed right to Flask. Address and port are 
 # used to configure the wsgi instance it starts
-#monitor_config:
+#monitor:
 #    enabled: True
 #    DEBUG: False
 #    address: 127.0.0.1
@@ -49,13 +54,14 @@ celery_task_prefix: simpledoge.tasks
 
 # the agent server allows data collection agents to connect and report stats
 # about stratum clients. disabled by default
-#agent_config:
+#agent:
 #    enabled: False
 #    address: 0.0.0.0
 #    port: 4444
 
-celery:
-    CELERY_IMPORTS: ['simpledoge.tasks']
+# this defines the celery options that get passed to the daemon. this should
+# define how to connect to the queue server, etc
+#celery: {}
 
 # Configures standard python loggers. type must be a logging handler provided
 # by python std lib. Future support for custom loggers would be great

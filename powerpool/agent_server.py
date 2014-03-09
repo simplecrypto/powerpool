@@ -135,15 +135,15 @@ class AgentServer(GenericServer):
                             send_error(34)
                             continue
 
-                        if 'params' not in data or len(data['params']) != 3:
+                        if 'params' not in data or len(data['params']) != 4:
                             send_error(36)
                             continue
 
-                        worker_addr, typ, data = data['params']
+                        worker_addr, typ, data, stamp = data['params']
                         user, worker = state['authed'][worker_addr]
                         if typ == "status":
                             self.celery.send_task_pp(
-                                'update_status', user, worker, data)
+                                'update_status', user, worker, data, stamp)
                             send_success()
                         else:
                             send_error(35)

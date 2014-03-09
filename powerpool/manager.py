@@ -29,14 +29,14 @@ def monitor_runner(net_state, config, stratum_clients, server_state,
                    agent_clients, exit_event):
     logger.info("Monitor server starting up; Thread ID {}"
                 .format(threading.current_thread()))
-    monitor_app.config.update(config['monitor_config'])
+    monitor_app.config.update(config['monitor'])
     monitor_app.config.update(dict(net_state=net_state,
                                    config=config,
                                    stratum_clients=stratum_clients,
                                    agent_clients=agent_clients,
                                    server_state=server_state))
-    wsgiserver = WSGIServer((config['monitor_config']['address'],
-                             config['monitor_config']['port']), monitor_app)
+    wsgiserver = WSGIServer((config['monitor']['address'],
+                             config['monitor']['port']), monitor_app)
     wsgiserver.start()
     try:
         exit_event.wait()
@@ -78,7 +78,7 @@ def agent_runner(config, stratum_clients, agent_clients, server_state, celery,
     logger.info("Agent server starting up; Thread ID {}"
                 .format(threading.current_thread()))
     sserver = AgentServer(
-        (config['agent_config']['address'], config['agent_config']['port']),
+        (config['agent']['address'], config['agent']['port']),
         stratum_clients,
         config,
         agent_clients,
@@ -129,11 +129,11 @@ def main():
                             'level': 'DEBUG'}],
                   start_difficulty=16,
                   term_timeout=3,
-                  monitor_config={'DEBUG': False,
+                  monitor={'DEBUG': False,
                                   'address': '127.0.0.1',
                                   'port': 3855,
                                   'enabled': True},
-                  agent_config={'address': '0.0.0.0',
+                  agent={'address': '0.0.0.0',
                                 'port': 4444,
                                 'enabled': False},
                   aliases={},
@@ -264,7 +264,7 @@ def main():
 
     # the agent server. allows peers to connect and send stat data about
     # a stratum worker
-    if config['agent_config']['enabled']:
+    if config['agent']['enabled']:
         agent_thread = threading.Thread(target=agent_runner, args=(
             config, stratum_clients, agent_clients, server_state, celery,
             exit_event))
@@ -274,7 +274,7 @@ def main():
 
     # the monitor server. a simple flask http server that lets you view
     # internal data structures to monitor server health
-    if config['monitor_config']['enabled']:
+    if config['monitor']['enabled']:
         monitor_thread = threading.Thread(target=monitor_runner, args=(
             net_state, config, stratum_clients, server_state, agent_clients,
             exit_event))
