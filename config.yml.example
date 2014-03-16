@@ -62,6 +62,7 @@ celery_task_prefix: simpledoge.tasks
 #       - temp
 #       - status
 #       - hashrate
+#       - thresholds
 
 # this defines the celery options that get passed to the daemon. this should
 # define how to connect to the queue server, etc

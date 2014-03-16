@@ -136,7 +136,7 @@ def main():
                   agent={'address': '0.0.0.0',
                          'port': 4444,
                          'enabled': False,
-                         'accepted_types': ['temp', 'status', 'hashrate']},
+                         'accepted_types': ['temp', 'status', 'hashrate', 'thresholds']},
                   aliases={},
                   block_poll=0.2,
                   job_generate_int=75,
