@@ -42,7 +42,7 @@ def general():
 
 
 keys = ['dup_shares', 'stale_shares', 'low_diff_shares', 'peer_name', 'worker',
-        'valid_shares']
+        'valid_shares', 'connection_time']
 
 
 def format_stratum(client):

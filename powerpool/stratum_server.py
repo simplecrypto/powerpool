@@ -94,7 +94,8 @@ class StratumServer(GenericServer):
             # last time we sent graphing data to the server
             'last_graph_transmit': 0,
             'new_block_event': None,
-            'difficulty': self.config['start_difficulty']
+            'difficulty': self.config['start_difficulty'],
+            'connection_time': int(time())
         }
         # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 1
