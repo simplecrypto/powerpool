@@ -1,6 +1,6 @@
 six
 git+https://github.com/icook/python-bitcoinrpc.git
-cryptokit
+git+https://github.com/icook/cryptokit.git
 gevent
 pyyaml
 celery

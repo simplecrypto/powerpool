@@ -265,11 +265,15 @@ class StratumClient(object):
 
         return self.BLOCK_FOUND
 
-    def report_shares(self, outcome):
+    def report_shares(self, flush=False):
         """ Goes through the list of recorded shares and aggregates them
         into one minute chunck for graph. Sends a task to record the minute
         chunks when one it found greater than zero. Also records a share
-        into internal records. """
+        into internal records.
+
+        Flush argument designates whether we're closing the connection and
+        should flush all shares we know about. If False only shares up until
+        the last complete minute will be reported. """
         now = int(time())
         if (now - self.last_graph_transmit) > 90:
             # bounds for a share to be grouped for transmission in minute
@@ -278,6 +282,9 @@ class StratumClient(object):
             # sent graph data (which should also be an exact round minute,
             # ensuring that we don't submit info for the same minute twice)
             upper = (now // 60) * 60
+            # will cause all shares to get reported
+            if flush:
+                upper += 120
             lower = self.last_graph_transmit
             # share records that are to be discarded
             expire = now - self.config['keep_share']
@@ -303,6 +310,9 @@ class StratumClient(object):
                     stamp, self.worker, *shares[1:])
             self.last_graph_transmit = upper
 
+    def log_share(self, outcome):
+        now = int(time())
+        self.report_shares()
         key = self.outcome_to_idx[outcome]
         getattr(self, key).setdefault(now, 0)
         getattr(self, key)[now] += self.difficulty
@@ -408,6 +418,7 @@ class StratumClient(object):
         except Exception:
             logger.error("Unhandled exception!", exc_info=True)
         finally:
+            self.report_shares(flush=True)
             self.server_state['stratum_disconnects'].incr()
             del self.stratum_clients[self.id]
             addr_worker = (self.address, self.worker)
