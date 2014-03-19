@@ -30,6 +30,43 @@ unless you want to wade through some code**
 
 DogeCoin Donation: D5pS6EBYyGwFv1PDdMUctxp21Q8wCAh3tY
 
+
+=============
+Getting Setup
+=============
+
+The only external service PowerPool relies on in is its Celery broker. By
+default this will be RabbitMQ on a local connection, so simply having it
+installed will work fine.
+
+.. code-block:: bash
+
+    sudo apt-get install rabbitmq-server
+
+Setup a virtualenv and install...
+
+.. code-block:: bash
+
+    # if you've got virtualenvwrapper...
+    mkvirtualenv pp
+    pip install -r requirements.txt
+    pip install -e .
+
+Now copy ``config.yml.example`` to ``config.yml``. All the defaults are
+commented out and mandatory fields are uncommented. Fill our your coinserver
+RPC connection information at the top. It should now be good to go.
+
+.. code-block:: bash
+
+    pp config.yml
+
+And now your stratum server is running. Point a miner at it on
+``localhost:3333`` and do some mining. View server health on the monitor port
+at ``http://localhost:3855``. Various events will be getting logged
+into RabbitMQ to be picked up by a celery worker. See `Simple Doge
+<https://github.com/ericecook/simpledoge>`_ for a reference task handling
+example.
+
 ============
 License
 ============
