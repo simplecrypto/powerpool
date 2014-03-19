@@ -9,17 +9,40 @@ from bitcoinrpc import CoinRPCException
 from cryptokit.block import scrypt_int
 from cryptokit import target_from_diff
 from hashlib import sha256
-from gevent import sleep, with_timeout
+from gevent import sleep, with_timeout, spawn
 from gevent.event import Event
+from gevent.queue import Queue
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
 
 from .server import GenericServer
 
+logger = logging.getLogger('stratum_server')
+
 
 class StratumServer(GenericServer):
-    logger = logging.getLogger('stratum_server')
+
+    def __init__(self, listener, stratum_clients, config, net_state,
+                 server_state, celery, **kwargs):
+        super(GenericServer, self).__init__(listener, **kwargs)
+        self.stratum_clients = stratum_clients
+        self.config = config
+        self.net_state = net_state
+        self.server_state = server_state
+        self.celery = celery
+        self.id_count = 0
+
+    def do_handle(self, *args):
+        # Warning: Not thread safe in the slightest, should be good for gevent
+        self.id_count += 1
+        self.server_state['stratum_connects'].incr()
+        client = StratumClient(self.id_count, self.stratum_clients, self.config,
+                               self.net_state, self.server_state, self.celery)
+        self.stratum_clients[self.id_count] = client
+
+
+class StratumClient(object):
     errors = {20: 'Other/Unknown',
               21: 'Job not found (=stale)',
               22: 'Duplicate share',
@@ -49,305 +72,286 @@ class StratumServer(GenericServer):
         VALID_SHARE: 'valid_shares'
     }
 
-    def __init__(self, listener, stratum_clients, config, net_state,
-                 server_state, celery, **kwargs):
-        super(GenericServer, self).__init__(listener, **kwargs)
-        self.stratum_clients = stratum_clients
-        self.config = config
-        self.net_state = net_state
-        self.server_state = server_state
-        self.celery = celery
-        self.id_count = 0
+    def __init__(self, sock, address, id, stratum_clients, config, net_state,
+                 server_state, celery):
+        logger.info("Recieving stratum connection from addr {} on sock {}"
+                    .format(address, sock))
 
-    def handle(self, sock, address):
-        self.logger.info("Recieving stratum connection from addr {} on sock {}"
-                         .format(address, sock))
-        self.server_state['stratum_connects'].incr()
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
         # Interval in seconds between keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 1)
         # Failed keepalive probles before declaring other end dead
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
-        fp = sock.makefile()
-        # create a dictionary to track our
-        state = {
-            # flags for current connection state
-            'peer_name': sock.getpeername(),
-            'authenticated': False,
-            'subscribed': False,
-            'address': None,
-            # the worker id. this is also extranonce 1
-            'id': hexlify(pack('Q', self.id_count)),
-            # subscription id for difficulty on stratum
-            'subscr_difficulty': None,
-            # subscription id for work notif on stratum
-            'subscr_notify': None,
-            # all shares keyed by timestamp. will get flushed after a
-            # period specified in config
-            'valid_shares': {},
-            'dup_shares': {},
-            'stale_shares': {},
-            'low_diff_shares': {},
-            # the name of this worker. empty string by default
-            'worker': '',
-            # last time we sent graphing data to the server
-            'last_graph_transmit': 0,
-            'new_block_event': None,
-            'difficulty': self.config['start_difficulty'],
-            'connection_time': int(time())
-        }
-        # Warning: Not thread safe in the slightest, should be good for gevent
-        self.id_count += 1
-        # track the id of the last message recieved for replying
-        msg_id = None
 
-        # watch for new block announcements and push accordingly
-        def new_block_call(event):
-            """ An event triggered by the network monitor when it learns of a
-            new block on the network. All old work is now useless so must be
-            flushed. """
-            push_job(flush=True)
-        state['new_block_event'] = Event()
-        state['new_block_event'].rawlink(new_block_call)
+        # flags for current connection state
+        self.peer_name = sock.getpeername()
+        self.authenticated = False
+        self.subscribed = False
+        self.address = None
+        self.worker = ''
+        # the worker id. this is also extranonce 1
+        self.id = hexlify(pack('Q', id))
+        # subscription id for difficulty on stratum
+        self.subscr_difficulty = None
+        # subscription id for work notif on stratum
+        self.subscr_notify = None
 
-        def send_error(num=20, id_val=1):
-            """ Utility for transmitting an error to the client """
-            err = {'id': id_val,
-                   'result': None,
-                   'error': (num, self.errors[num], None)}
-            self.logger.debug("error response: {}".format(pformat(err)))
-            fp.write(json.dumps(err, separators=(',', ':')) + "\n")
-            fp.flush()
+        # all shares keyed by timestamp. will get flushed after a period
+        # specified in config
+        self.valid_shares = {}
+        self.dup_shares = {}
+        self.stale_shares = {}
+        self.low_diff_shares = {}
+        # last time we sent graphing data to the server
+        self.last_graph_transmit = 0
+        self.difficulty = self.config['start_difficulty']
+        self.connection_time = int(time())
+        self.msg_id = None
+        self.fp = sock.makefile()
 
-        def send_success(id_val=1):
-            """ Utility for transmitting success to the client """
-            succ = {'id': id_val, 'result': True, 'error': None}
-            self.logger.debug("success response: {}".format(pformat(succ)))
-            fp.write(json.dumps(succ, separators=(',', ':')) + "\n")
-            fp.flush()
+        # trigger to send a new block notice to a user
+        self.new_block_event = None
+        self.new_block_event = Event()
+        self.new_block_event.rawlink(self.new_block_call)
 
-        def push_difficulty():
-            """ Pushes the current difficulty to the client. Currently this
-            only happens uppon initial connect, but would be used for vardiff
-            """
-            send = {'params': [state['difficulty']],
-                    'id': None,
-                    'method': 'mining.set_difficulty'}
-            fp.write(json.dumps(send, separators=(',', ':')) + "\n")
-            fp.flush()
+        # where we put all the messages that need to go out
+        self.write_queue = Queue()
 
-        def push_job(flush=False):
-            """ Pushes the latest job down to the client. Flush is whether
-            or not he should dump his previous jobs or not. Dump will occur
-            when a new block is found since work on the old block is
-            invalid."""
-            job = None
-            while True:
-                jobid = self.net_state['latest_job']
-                try:
-                    job = self.net_state['jobs'][jobid]
-                    break
-                except KeyError:
-                    self.logger.debug("No jobs available for worker!")
-                    sleep(0.5)
+        spawn(self.read_loop)
+        spawn(self.write_loop)
 
-            send_params = job.stratum_params() + [flush]
-            # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
-            # 5: version 6: nbits 7: ntime 8: clean_jobs
-            self.logger.debug(
-                "Sending new job to worker\n\tjob_id: {0}\n\tprevhash: {1}"
-                "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
-                "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
-                "\n\tclean_jobs: {8}\n"
-                .format(*send_params, bt=job.bits_target))
-            send = {'params': send_params,
-                    'id': None,
-                    'method': 'mining.notify'}
-            fp.write(json.dumps(send, separators=(',', ':')) + "\n")
-            fp.flush()
+    # watch for new block announcements and push accordingly
+    def new_block_call(self, event):
+        """ An event triggered by the network monitor when it learns of a
+        new block on the network. All old work is now useless so must be
+        flushed. """
+        self.push_job(flush=True)
 
-        def submit_job(data):
-            """ Handles recieving work submission and checking that it is valid
-            , if it meets network diff, etc. Sends reply to stratum client. """
-            params = data['params']
-            # [worker_name, job_id, extranonce2, ntime, nonce]
-            # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
-            self.logger.debug(
-                "Recieved work submit:\n\tworker_name: {0}\n\t"
-                "job_id: {1}\n\textranonce2: {2}\n\t"
-                "ntime: {3}\n\tnonce: {4} ({int_nonce})"
-                .format(
-                    *params,
-                    int_nonce=unpack(str("<L"), unhexlify(params[4]))))
+    def send_error(self, num=20, id_val=1):
+        """ Utility for transmitting an error to the client """
+        err = {'id': id_val,
+               'result': None,
+               'error': (num, self.errors[num], None)}
+        logger.debug("error response: {}".format(pformat(err)))
+        self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
-            job = self.net_state['jobs'].get(data['params'][1])
-            if not job:
-                # stale job
-                send_error(self.STALE_SHARE)
-                self.server_state['reject_stale'].incr(state['difficulty'])
-                return self.STALE_SHARE
+    def send_success(self, id_val=1):
+        """ Utility for transmitting success to the client """
+        succ = {'id': id_val, 'result': True, 'error': None}
+        logger.debug("success response: {}".format(pformat(succ)))
+        self.write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
 
-            header = job.block_header(
-                nonce=params[4],
-                extra1=state['id'],
-                extra2=params[2],
-                ntime=params[3])
+    def push_difficulty(self):
+        """ Pushes the current difficulty to the client. Currently this
+        only happens uppon initial connect, but would be used for vardiff
+        """
+        send = {'params': [self.difficulty],
+                'id': None,
+                'method': 'mining.set_difficulty'}
+        self.write_queue.put(json.dumps(send, separators=(',', ':')) + "\n")
 
-            # Check a submitted share against previous shares to eliminate
-            # duplicates
-            share = (state['id'], params[2], params[4])
-            if share in job.acc_shares:
-                self.logger.info("Duplicate share!")
-                send_error(self.DUP_SHARE)
-                self.server_state['reject_dup'].incr(state['difficulty'])
-                return self.DUP_SHARE
+    def push_job(self, flush=False):
+        """ Pushes the latest job down to the client. Flush is whether
+        or not he should dump his previous jobs or not. Dump will occur
+        when a new block is found since work on the old block is
+        invalid."""
+        job = None
+        while True:
+            jobid = self.net_state['latest_job']
+            try:
+                job = self.net_state['jobs'][jobid]
+                break
+            except KeyError:
+                logger.debug("No jobs available for worker!")
+                sleep(0.5)
 
-            job_target = target_from_diff(state['difficulty'],
-                                          self.config['diff1'])
-            hash_int = scrypt_int(header)
-            if hash_int >= job_target:
-                self.logger.debug("Low diff share!")
-                send_error(self.LOW_DIFF)
-                self.server_state['reject_low'].incr(state['difficulty'])
-                return self.LOW_DIFF
+        send_params = job.stratum_params() + [flush]
+        # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
+        # 5: version 6: nbits 7: ntime 8: clean_jobs
+        logger.debug(
+            "Sending new job to worker\n\tjob_id: {0}\n\tprevhash: {1}"
+            "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
+            "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
+            "\n\tclean_jobs: {8}\n"
+            .format(*send_params, bt=job.bits_target))
+        send = {'params': send_params,
+                'id': None,
+                'method': 'mining.notify'}
+        self.write_queue.put(json.dumps(send, separators=(',', ':')) + "\n")
 
-            # we want to send an ack ASAP, so do it here
-            send_success(msg_id)
-            self.logger.debug("Valid job accepted!")
-            # Add the share to the accepted set to check for dups
-            job.acc_shares.add(share)
-            self.server_state['shares'].incr(state['difficulty'])
-            self.celery.send_task_pp('add_share', state['address'], state['difficulty'])
+    def submit_job(self, data):
+        """ Handles recieving work submission and checking that it is valid
+        , if it meets network diff, etc. Sends reply to stratum client. """
+        params = data['params']
+        # [worker_name, job_id, extranonce2, ntime, nonce]
+        # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
+        logger.debug(
+            "Recieved work submit:\n\tworker_name: {0}\n\t"
+            "job_id: {1}\n\textranonce2: {2}\n\t"
+            "ntime: {3}\n\tnonce: {4} ({int_nonce})"
+            .format(
+                *params,
+                int_nonce=unpack(str("<L"), unhexlify(params[4]))))
 
-            # valid network hash?
-            if hash_int >= job.bits_target:
-                return self.VALID_SHARE
+        job = self.net_state['jobs'].get(data['params'][1])
+        if not job:
+            # stale job
+            self.send_error(self.STALE_SHARE)
+            self.server_state['reject_stale'].incr(self.difficulty)
+            return self.STALE_SHARE
 
-            self.logger.log(35, "Valid network block identified!")
-            block = job.submit_serial(header)
-            for conn in self.net_state['live_connections']:
-                try:
-                    res = conn.submitblock(hexlify(block))
-                except (CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.error("Block failed to submit to the server!",
-                                      exc_info=True)
-                    self.logger.warn(getattr(e, 'error'))
-                else:
-                    if res is None:
-                        hash_hex = hexlify(
-                            sha256(sha256(header).digest()).digest()[::-1])
-                        self.celery.send_task_pp(
-                            'add_block',
-                            state['address'],
-                            self.net_state['current_height'] + 1,
-                            job.total_value,
-                            job.fee_total,
-                            hexlify(job.bits),
-                            hash_hex)
-                        self.logger.info("NEW BLOCK ACCEPTED!!!")
-                        self.logger.info("New block at height %i"
-                                         % self.net_state['current_height'])
-                        self.logger.info("Block coinbase hash %s"
-                                         % job.coinbase.lehexhash)
-                        self.server_state['block_solve'] = int(time())
-                    else:
-                        self.logger.error("Block failed to submit to the server!",
-                                          exc_info=True)
+        header = job.block_header(
+            nonce=params[4],
+            extra1=self.id,
+            extra2=params[2],
+            ntime=params[3])
 
-            return self.BLOCK_FOUND
+        # Check a submitted share against previous shares to eliminate
+        # duplicates
+        share = (self.id, params[2], params[4])
+        if share in job.acc_shares:
+            logger.info("Duplicate share!")
+            self.send_error(self.DUP_SHARE)
+            self.server_state['reject_dup'].incr(self.difficulty)
+            return self.DUP_SHARE
 
-        def report_shares(outcome):
-            """ Goes through the list of recorded shares and aggregates them
-            into one minute chunck for graph. Sends a task to record the minute
-            chunks when one it found greater than zero. Also records a share
-            into internal records. """
-            now = int(time())
-            if (now - state['last_graph_transmit']) > 90:
-                # bounds for a share to be grouped for transmission in minute
-                # chunks. the upper bound is the last minute that has
-                # completely passed, while the lower bound is the last time we
-                # sent graph data (which should also be an exact round minute,
-                # ensuring that we don't submit info for the same minute twice)
-                upper = (now // 60) * 60
-                lower = state['last_graph_transmit']
-                # share records that are to be discarded
-                expire = now - self.config['keep_share']
-                # for transmission
-                chunks = {}
-                # a list of indexes that have expired and are ready for removal
-                rem = []
-                for i, key in enumerate(self.share_types):
-                    for stamp, shares in state[key].iteritems():
-                        if stamp >= lower and stamp < upper:
-                            minute = (stamp // 60) * 60
-                            chunks.setdefault(minute, [0, 0, 0, 0])
-                            chunks[minute][i] += shares
-                        if stamp < expire:
-                            rem.append((key, stamp))
+        job_target = target_from_diff(self.difficulty, self.config['diff1'])
+        hash_int = scrypt_int(header)
+        if hash_int >= job_target:
+            logger.debug("Low diff share!")
+            self.send_error(self.LOW_DIFF)
+            self.server_state['reject_low'].incr(self.difficulty)
+            return self.LOW_DIFF
 
-                for key, stamp in rem:
-                    del state[key][stamp]
+        # we want to send an ack ASAP, so do it here
+        self.send_success(self.msg_id)
+        logger.debug("Valid job accepted!")
+        # Add the share to the accepted set to check for dups
+        job.acc_shares.add(share)
+        self.server_state['shares'].incr(self.difficulty)
+        self.celery.send_task_pp('add_share', self.address, self.difficulty)
 
-                for stamp, shares in chunks.iteritems():
+        # valid network hash?
+        if hash_int >= job.bits_target:
+            return self.VALID_SHARE
+
+        logger.log(35, "Valid network block identified!")
+        block = job.submit_serial(header)
+        for conn in self.net_state['live_connections']:
+            try:
+                res = conn.submitblock(hexlify(block))
+            except (CoinRPCException, socket.error, ValueError) as e:
+                logger.error("Block failed to submit to the server!", exc_info=True)
+                logger.warn(getattr(e, 'error'))
+            else:
+                if res is None:
+                    hash_hex = hexlify(
+                        sha256(sha256(header).digest()).digest()[::-1])
                     self.celery.send_task_pp(
-                        'add_one_minute', state['address'], shares[0],
-                        stamp, state['worker'], *shares[1:])
-                state['last_graph_transmit'] = upper
+                        'add_block',
+                        self.address,
+                        self.net_state['current_height'] + 1,
+                        job.total_value,
+                        job.fee_total,
+                        hexlify(job.bits),
+                        hash_hex)
+                    logger.info("NEW BLOCK ACCEPTED!!!")
+                    logger.info("New block at height %i" % self.net_state['current_height'])
+                    logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
+                    self.server_state['block_solve'] = int(time())
+                else:
+                    logger.error("Block failed to submit to the server!", exc_info=True)
 
-            key = self.outcome_to_idx[outcome]
-            state[key].setdefault(now, 0)
-            state[key][now] += state['difficulty']
+        return self.BLOCK_FOUND
 
-        def authenticate(data):
-            username = data.get('params', [None])[0]
-            user_worker = self.convert_username(username)
-            # setup lookup table for easier access from other read sources
-            self.stratum_clients['addr_worker_lut'][user_worker] = state
-            self.stratum_clients['address_lut'].setdefault(user_worker[0], [])
-            self.stratum_clients['address_lut'][user_worker[0]].append(state)
-            # unpack into state dictionary
-            state['address'], state['worker'] = user_worker
-            state['authenticated'] = True
-            send_success(msg_id)
-            push_difficulty()
-            push_job()
+    def report_shares(self, outcome):
+        """ Goes through the list of recorded shares and aggregates them
+        into one minute chunck for graph. Sends a task to record the minute
+        chunks when one it found greater than zero. Also records a share
+        into internal records. """
+        now = int(time())
+        if (now - self.last_graph_transmit) > 90:
+            # bounds for a share to be grouped for transmission in minute
+            # chunks. the upper bound is the last minute that has
+            # completely passed, while the lower bound is the last time we
+            # sent graph data (which should also be an exact round minute,
+            # ensuring that we don't submit info for the same minute twice)
+            upper = (now // 60) * 60
+            lower = self.last_graph_transmit
+            # share records that are to be discarded
+            expire = now - self.config['keep_share']
+            # for transmission
+            chunks = {}
+            # a list of indexes that have expired and are ready for removal
+            rem = []
+            for i, key in enumerate(self.share_types):
+                for stamp, shares in getattr(self, key).iteritems():
+                    if stamp >= lower and stamp < upper:
+                        minute = (stamp // 60) * 60
+                        chunks.setdefault(minute, [0, 0, 0, 0])
+                        chunks[minute][i] += shares
+                    if stamp < expire:
+                        rem.append((key, stamp))
 
-        def subscribe(data):
-            state['subscr_notify'] = sha1(urandom(4)).hexdigest()
-            state['subscr_difficulty'] = sha1(urandom(4)).hexdigest()
-            ret = {'result':
-                   ((("mining.set_difficulty",
-                      state['subscr_difficulty']),
-                     ("mining.notify",
-                      state['subscr_notify'])),
-                    state['id'],
-                    self.config['extranonce_size']),
-                   'error': None,
-                   'id': msg_id}
-            state['subscribed'] = True
-            self.logger.debug("Sending subscribe response: {}"
-                              .format(pformat(ret)))
-            fp.write(json.dumps(ret) + "\n")
-            fp.flush()
+            for key, stamp in rem:
+                del getattr(self, key)[stamp]
 
-        self.stratum_clients[state['id']] = state
+            for stamp, shares in chunks.iteritems():
+                self.celery.send_task_pp(
+                    'add_one_minute', self.address, shares[0],
+                    stamp, self.worker, *shares[1:])
+            self.last_graph_transmit = upper
 
+        key = self.outcome_to_idx[outcome]
+        getattr(self, key).setdefault(now, 0)
+        getattr(self, key)[now] += self.difficulty
+
+    def authenticate(self, data):
+        username = data.get('params', [None])[0]
+        user_worker = self.convert_username(username)
+        # setup lookup table for easier access from other read sources
+        self.stratum_clients['addr_worker_lut'][user_worker] = self
+        self.stratum_clients['address_lut'].setdefault(user_worker[0], [])
+        self.stratum_clients['address_lut'][user_worker[0]].append(self)
+        # unpack into state dictionary
+        self.address, self.worker = user_worker
+        self.authenticated = True
+        self.send_success(self.msg_id)
+        self.push_difficulty()
+        self.push_job()
+
+    def subscribe(self, data):
+        self.subscr_notify = sha1(urandom(4)).hexdigest()
+        self.subscr_difficulty = sha1(urandom(4)).hexdigest()
+        ret = {'result':
+               ((("mining.set_difficulty",
+                  self.subscr_difficulty),
+                 ("mining.notify",
+                  self.subscr_notify)),
+                self.id,
+                self.config['extranonce_size']),
+               'error': None,
+               'id': self.msg_id}
+        self.subscribed = True
+        logger.debug("Sending subscribe response: {}".format(pformat(ret)))
+        self.write_queue.put(json.dumps(ret) + "\n")
+
+    def read_loop(self):
         # do a finally call to cleanup when we exit
         try:
-
             while True:
                 line = with_timeout(self.config['push_job_interval'],
-                                    fp.readline,
+                                    self.fp.readline,
                                     timeout_value='timeout')
 
                 # push a new job every timeout seconds if requested
                 if line == 'timeout':
-                    self.logger.debug(
+                    logger.debug(
                         "Pushing new job to client {} after timeout"
-                        .format(state['id']))
-                    if state['authenticated'] is True:
-                        push_job(flush=False)
+                        .format(self.id))
+                    if self.authenticated is True:
+                        self.push_job(flush=False)
                     continue
 
                 line = line.strip()
@@ -357,59 +361,57 @@ class StratumServer(GenericServer):
                     try:
                         data = json.loads(line)
                     except ValueError:
-                        self.logger.debug("Data {} not JSON".format(line))
-                        send_error()
+                        logger.debug("Data {} not JSON".format(line))
+                        self.send_error()
                         continue
                 else:
-                    send_error()
+                    self.send_error()
                     sleep(1)
                     continue
 
                 # set the msgid
-                msg_id = data.get('id', 1)
-                self.logger.debug("Data {} recieved on client {}"
-                                  .format(data, state['id']))
+                self.msg_id = data.get('id', 1)
+                logger.debug("Data {} recieved on client {}".format(data, self.id))
 
                 if 'method' in data:
                     meth = data['method'].lower()
                     if meth == 'mining.subscribe':
-                        if state['subscribed'] is True:
-                            send_error()
+                        if self.subscribed is True:
+                            self.send_error()
                             continue
 
-                        subscribe(data)
+                        self.subscribe(data)
                     elif meth == "mining.authorize":
-                        if state['subscribed'] is False:
-                            send_error(25)
+                        if self.subscribed is False:
+                            self.send_error(25)
                             continue
-                        if state['authenticated'] is True:
-                            send_error()
+                        if self.authenticated is True:
+                            self.send_error()
                             continue
 
-                        authenticate(data)
+                        self.authenticate(data)
                     elif meth == "mining.submit":
-                        if state['authenticated'] is False:
-                            send_error(24)
+                        if self.authenticated is False:
+                            self.send_error(24)
                             continue
 
-                        res = submit_job(data)
+                        res = self.submit_job(data)
                         if res:
-                            report_shares(res)
+                            self.report_shares(res)
                 else:
-                    self.logger.info("Unkown action for command {}"
-                                     .format(data))
-                    send_error()
+                    logger.info("Unkown action for command {}".format(data))
+                    self.send_error()
 
-            sock.shutdown(socket.SHUT_WR)
-            sock.close()
+            self.sock.shutdown(socket.SHUT_WR)
+            self.sock.close()
         except socket.error:
             pass
         except Exception:
-            self.logger.error("Unhandled exception!", exc_info=True)
+            logger.error("Unhandled exception!", exc_info=True)
         finally:
             self.server_state['stratum_disconnects'].incr()
-            del self.stratum_clients[state['id']]
-            addr_worker = (state['address'], state['worker'])
+            del self.stratum_clients[self.id]
+            addr_worker = (self.address, self.worker)
             # clear the worker from the luts
             try:
                 del self.stratum_clients['addr_worker_lut'][addr_worker]
@@ -417,11 +419,16 @@ class StratumServer(GenericServer):
                 pass
             try:
                 # remove from lut for address
-                self.stratum_clients['address_lut'][state['address']].remove(state)
+                self.stratum_clients['address_lut'][self.address].remove(self)
                 # delete the list if its empty
-                if not len(self.stratum_clients['address_lut'][state['address']]):
-                    del self.stratum_clients['address_lut'][state['address']]
+                if not len(self.stratum_clients['address_lut'][self.address]):
+                    del self.stratum_clients['address_lut'][self.address]
             except (ValueError, KeyError):
                 pass
 
-        self.logger.info("Closing connection for client {}".format(state['id']))
+        logger.info("Closing connection for client {}".format(self.id))
+
+    def write_loop(self):
+        for item in self.write_queue:
+            self.fp.write(item)
+            self.fp.flush()
