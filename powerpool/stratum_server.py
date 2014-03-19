@@ -347,11 +347,10 @@ class StratumClient(object):
 
                 # push a new job every timeout seconds if requested
                 if line == 'timeout':
-                    logger.debug(
-                        "Pushing new job to client {} after timeout"
-                        .format(self.id))
+                    logger.debug("Pushing new job to client {} after timeout"
+                                 .format(self.id))
                     if self.authenticated is True:
-                        self.push_job(flush=False)
+                        self.push_job()
                     continue
 
                 line = line.strip()
@@ -399,7 +398,7 @@ class StratumClient(object):
                         if res:
                             self.report_shares(res)
                 else:
-                    logger.info("Unkown action for command {}".format(data))
+                    logger.warn("Unkown action for command {}".format(data))
                     self.send_error()
 
             self.sock.shutdown(socket.SHUT_WR)

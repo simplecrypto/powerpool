@@ -135,6 +135,7 @@ def main():
                            'enabled': True},
                   agent={'address': '0.0.0.0',
                          'port': 4444,
+                         'timeout': 120,
                          'enabled': False,
                          'accepted_types': ['temp', 'status', 'hashrate', 'thresholds']},
                   aliases={},

@@ -78,13 +78,13 @@ class AgentServer(GenericServer):
         # do a finally call to cleanup when we exit
         try:
             while True:
-                line = with_timeout(self.config['push_job_interval'],
+                line = with_timeout(self.config['agent']['timeout'],
                                     fp.readline,
                                     timeout_value='timeout')
 
                 # push a new job every timeout seconds if requested
                 if line == 'timeout':
-                    continue
+                    break
 
                 line = line.strip()
 
