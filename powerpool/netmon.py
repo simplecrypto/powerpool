@@ -1,7 +1,7 @@
 import logging
 import bitcoinrpc
 
-from future.utils import viewvalues
+from future.utils import viewitems
 from binascii import unhexlify, hexlify
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
@@ -55,10 +55,12 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
         """ Called when a new block was discovered in the longest blockchain.
         This will dump current jobs, create a new job, and then push the
         new job to all mining clients """
-        for idx, dct in enumerate(viewvalues(stratum_clients)):
-            if 'new_block_event' in dct:  # ensure they've inited...
+        for idx, client in viewitems(stratum_clients):
+            try:
                 logger.debug("Signaling new block for client {}".format(idx))
-                dct['new_block_event'].set()
+                client.new_block_event.set()
+            except AttributeError:
+                logger.warn("No new block event attr on client!")
 
     def update_pool(conn):
         try:

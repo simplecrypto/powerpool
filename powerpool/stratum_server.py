@@ -1,6 +1,8 @@
 import json
 import socket
 import logging
+import re
+import datetime
 
 from time import time
 from binascii import hexlify, unhexlify
@@ -15,6 +17,7 @@ from gevent.queue import Queue
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
+from cryptokit.base58 import get_bcaddress_version
 
 from .server import GenericServer
 
@@ -33,13 +36,12 @@ class StratumServer(GenericServer):
         self.celery = celery
         self.id_count = 0
 
-    def do_handle(self, *args):
+    def handle(self, sock, address):
         # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 1
         self.server_state['stratum_connects'].incr()
-        client = StratumClient(self.id_count, self.stratum_clients, self.config,
-                               self.net_state, self.server_state, self.celery)
-        self.stratum_clients[self.id_count] = client
+        StratumClient(sock, address, self.id_count, self.stratum_clients,
+                      self.config, self.net_state, self.server_state, self.celery)
 
 
 class StratumClient(object):
@@ -84,6 +86,16 @@ class StratumClient(object):
         # Failed keepalive probles before declaring other end dead
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
+        # global items
+        self.config = config
+        self.net_state = net_state
+        self.stratum_clients = stratum_clients
+        self.server_state = server_state
+        self.celery = celery
+
+        # register client into the client dictionary
+        self.stratum_clients[id] = self
+
         # flags for current connection state
         self.peer_name = sock.getpeername()
         self.authenticated = False
@@ -118,8 +130,60 @@ class StratumClient(object):
         # where we put all the messages that need to go out
         self.write_queue = Queue()
 
-        spawn(self.read_loop)
         spawn(self.write_loop)
+        self.read_loop()
+
+    @property
+    def summary(self):
+        return dict(hr=self.hashrate, worker=self.worker, address=self.address)
+
+    @property
+    def hashrate(self):
+        return (sum(self.valid_shares) * (2 ** 16)) / 1000000 / 600.0
+
+    @property
+    def connection_time_dt(self):
+        return datetime.datetime.utcfromtimestamp(self.connection_time)
+
+    @property
+    def details(self):
+        return dict(dup_shares=self.dup_shares,
+                    stale_shares=self.stale_shares,
+                    low_diff_shares=self.low_diff_shares,
+                    valid_shares=self.valid_shares,
+                    worker=self.worker,
+                    address=self.address,
+                    connection_time=self.connection_time_dt)
+
+    def convert_username(self, username):
+        # if the address they passed is a valid address,
+        # use it. Otherwise use the pool address
+        bits = username.split('.', 1)
+        username = bits[0]
+        worker = ''
+        if len(bits) > 1:
+            logger.debug("Registering worker name {}".format(bits[1]))
+            worker = bits[1][:16]
+        try:
+            version = get_bcaddress_version(username)
+        except Exception:
+            version = False
+
+        if version:
+            address = username
+        else:
+            filtered = re.sub('[\W_]+', '', username).lower()
+            logger.debug(
+                "Invalid address passed in, checking aliases against {}"
+                .format(filtered))
+            if filtered in self.config['aliases']:
+                address = self.config['aliases'][filtered]
+                logger.debug("Setting address alias to {}".format(address))
+            else:
+                address = self.config['donate_address']
+                logger.debug("Falling back to donate address {}".format(address))
+
+        return address, worker
 
     # watch for new block announcements and push accordingly
     def new_block_call(self, event):
@@ -406,7 +470,7 @@ class StratumClient(object):
 
                         res = self.submit_job(data)
                         if res:
-                            self.report_shares(res)
+                            self.log_share(res)
                 else:
                     logger.warn("Unkown action for command {}".format(data))
                     self.send_error()

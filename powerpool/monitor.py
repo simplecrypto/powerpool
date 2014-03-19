@@ -41,15 +41,6 @@ def general():
                    block_solve=server_state['block_solve'])
 
 
-keys = ['dup_shares', 'stale_shares', 'low_diff_shares', 'peer_name', 'worker',
-        'valid_shares', 'connection_time']
-
-
-def format_stratum(client):
-    global keys
-    return {key: value for key, value in client.iteritems() if key in keys}
-
-
 @monitor_app.route('/client/<address>')
 def client(address=None):
     try:
@@ -57,13 +48,13 @@ def client(address=None):
     except KeyError:
         abort(404)
 
-    return jsonify(**{address: [format_stratum(client) for client in clients]})
+    return jsonify(**{address: [client.summary for client in clients]})
 
 
 @monitor_app.route('/clients')
 def clients():
     lut = monitor_app.config['stratum_clients']['address_lut']
-    clients = {key: [format_stratum(item) for item in value]
+    clients = {key: [item.details for item in value]
                for key, value in lut.iteritems()}
 
     return jsonify(clients=clients)
