@@ -88,7 +88,7 @@ class AgentClient(GenericClient):
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
             read_greenlet.kill()
-            self.server_self.agent_disconnects.incr()
+            self.server_state['agent_disconnects'].incr()
             if self.client_state:
                 try:
                     del self.agent_clients[self.id]
