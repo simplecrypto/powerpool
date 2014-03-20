@@ -19,9 +19,7 @@ from os import urandom
 from pprint import pformat
 from cryptokit.base58 import get_bcaddress_version
 
-from .server import GenericServer
-
-logger = logging.getLogger('stratum_server')
+from .server import GenericServer, GenericClient
 
 
 class StratumServer(GenericServer):
@@ -44,7 +42,9 @@ class StratumServer(GenericServer):
                       self.config, self.net_state, self.server_state, self.celery)
 
 
-class StratumClient(object):
+class StratumClient(GenericClient):
+    logger = logging.getLogger('stratum_server')
+
     errors = {20: 'Other/Unknown',
               21: 'Job not found (=stale)',
               22: 'Duplicate share',
@@ -76,7 +76,7 @@ class StratumClient(object):
 
     def __init__(self, sock, address, id, stratum_clients, config, net_state,
                  server_state, celery):
-        logger.info("Recieving stratum connection from addr {} on sock {}"
+        self.logger.info("Recieving stratum connection from addr {} on sock {}"
                     .format(address, sock))
 
         # Seconds before sending keepalive probes
@@ -94,9 +94,10 @@ class StratumClient(object):
         self.celery = celery
 
         # register client into the client dictionary
-        self.stratum_clients[id] = self
+        self.sock = sock
 
         # flags for current connection state
+        self._disconnected = False
         self.peer_name = sock.getpeername()
         self.authenticated = False
         self.subscribed = False
@@ -104,6 +105,7 @@ class StratumClient(object):
         self.worker = ''
         # the worker id. this is also extranonce 1
         self.id = hexlify(pack('Q', id))
+        self.stratum_clients[self.id] = self
         # subscription id for difficulty on stratum
         self.subscr_difficulty = None
         # subscription id for work notif on stratum
@@ -130,8 +132,34 @@ class StratumClient(object):
         # where we put all the messages that need to go out
         self.write_queue = Queue()
 
-        spawn(self.write_loop)
-        self.read_loop()
+        read_greenlet = spawn(self.write_loop)
+        try:
+            self.read_loop()
+        except socket.error:
+            pass
+        except Exception:
+            self.logger.error("Unhandled exception!", exc_info=True)
+        finally:
+            read_greenlet.kill()
+            self.report_shares(flush=True)
+            self.server_state['stratum_disconnects'].incr()
+            del self.stratum_clients[self.id]
+            addr_worker = (self.address, self.worker)
+            # clear the worker from the luts
+            try:
+                del self.stratum_clients['addr_worker_lut'][addr_worker]
+            except KeyError:
+                pass
+            try:
+                # remove from lut for address
+                self.stratum_clients['address_lut'][self.address].remove(self)
+                # delete the list if its empty
+                if not len(self.stratum_clients['address_lut'][self.address]):
+                    del self.stratum_clients['address_lut'][self.address]
+            except (ValueError, KeyError):
+                pass
+
+        self.logger.info("Closing connection for client {}".format(self.id))
 
     @property
     def summary(self):
@@ -140,10 +168,6 @@ class StratumClient(object):
     @property
     def hashrate(self):
         return (sum(self.valid_shares) * (2 ** 16)) / 1000000 / 600.0
-
-    @property
-    def connection_time_dt(self):
-        return datetime.datetime.utcfromtimestamp(self.connection_time)
 
     @property
     def details(self):
@@ -162,7 +186,7 @@ class StratumClient(object):
         username = bits[0]
         worker = ''
         if len(bits) > 1:
-            logger.debug("Registering worker name {}".format(bits[1]))
+            self.logger.debug("Registering worker name {}".format(bits[1]))
             worker = bits[1][:16]
         try:
             version = get_bcaddress_version(username)
@@ -173,15 +197,15 @@ class StratumClient(object):
             address = username
         else:
             filtered = re.sub('[\W_]+', '', username).lower()
-            logger.debug(
+            self.logger.debug(
                 "Invalid address passed in, checking aliases against {}"
                 .format(filtered))
             if filtered in self.config['aliases']:
                 address = self.config['aliases'][filtered]
-                logger.debug("Setting address alias to {}".format(address))
+                self.logger.debug("Setting address alias to {}".format(address))
             else:
                 address = self.config['donate_address']
-                logger.debug("Falling back to donate address {}".format(address))
+                self.logger.debug("Falling back to donate address {}".format(address))
 
         return address, worker
 
@@ -197,13 +221,13 @@ class StratumClient(object):
         err = {'id': id_val,
                'result': None,
                'error': (num, self.errors[num], None)}
-        logger.debug("error response: {}".format(pformat(err)))
+        self.logger.debug("error response: {}".format(pformat(err)))
         self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self, id_val=1):
         """ Utility for transmitting success to the client """
         succ = {'id': id_val, 'result': True, 'error': None}
-        logger.debug("success response: {}".format(pformat(succ)))
+        self.logger.debug("success response: {}".format(pformat(succ)))
         self.write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
 
     def push_difficulty(self):
@@ -227,13 +251,13 @@ class StratumClient(object):
                 job = self.net_state['jobs'][jobid]
                 break
             except KeyError:
-                logger.debug("No jobs available for worker!")
+                self.logger.debug("No jobs available for worker!")
                 sleep(0.5)
 
         send_params = job.stratum_params() + [flush]
         # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
         # 5: version 6: nbits 7: ntime 8: clean_jobs
-        logger.debug(
+        self.logger.debug(
             "Sending new job to worker\n\tjob_id: {0}\n\tprevhash: {1}"
             "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
             "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
@@ -250,7 +274,7 @@ class StratumClient(object):
         params = data['params']
         # [worker_name, job_id, extranonce2, ntime, nonce]
         # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
-        logger.debug(
+        self.logger.debug(
             "Recieved work submit:\n\tworker_name: {0}\n\t"
             "job_id: {1}\n\textranonce2: {2}\n\t"
             "ntime: {3}\n\tnonce: {4} ({int_nonce})"
@@ -275,7 +299,7 @@ class StratumClient(object):
         # duplicates
         share = (self.id, params[2], params[4])
         if share in job.acc_shares:
-            logger.info("Duplicate share!")
+            self.logger.info("Duplicate share!")
             self.send_error(self.DUP_SHARE)
             self.server_state['reject_dup'].incr(self.difficulty)
             return self.DUP_SHARE
@@ -283,14 +307,14 @@ class StratumClient(object):
         job_target = target_from_diff(self.difficulty, self.config['diff1'])
         hash_int = scrypt_int(header)
         if hash_int >= job_target:
-            logger.debug("Low diff share!")
+            self.logger.debug("Low diff share!")
             self.send_error(self.LOW_DIFF)
             self.server_state['reject_low'].incr(self.difficulty)
             return self.LOW_DIFF
 
         # we want to send an ack ASAP, so do it here
         self.send_success(self.msg_id)
-        logger.debug("Valid job accepted!")
+        self.logger.debug("Valid job accepted!")
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.server_state['shares'].incr(self.difficulty)
@@ -300,14 +324,14 @@ class StratumClient(object):
         if hash_int >= job.bits_target:
             return self.VALID_SHARE
 
-        logger.log(35, "Valid network block identified!")
+        self.logger.log(35, "Valid network block identified!")
         block = job.submit_serial(header)
         for conn in self.net_state['live_connections']:
             try:
                 res = conn.submitblock(hexlify(block))
             except (CoinRPCException, socket.error, ValueError) as e:
-                logger.error("Block failed to submit to the server!", exc_info=True)
-                logger.warn(getattr(e, 'error'))
+                self.logger.error("Block failed to submit to the server!", exc_info=True)
+                self.logger.warn(getattr(e, 'error'))
             else:
                 if res is None:
                     hash_hex = hexlify(
@@ -320,12 +344,12 @@ class StratumClient(object):
                         job.fee_total,
                         hexlify(job.bits),
                         hash_hex)
-                    logger.info("NEW BLOCK ACCEPTED!!!")
-                    logger.info("New block at height %i" % self.net_state['current_height'])
-                    logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
+                    self.logger.info("NEW BLOCK ACCEPTED!!!")
+                    self.logger.info("New block at height %i" % self.net_state['current_height'])
+                    self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
                     self.server_state['block_solve'] = int(time())
                 else:
-                    logger.error("Block failed to submit to the server!", exc_info=True)
+                    self.logger.error("Block failed to submit to the server!", exc_info=True)
 
         return self.BLOCK_FOUND
 
@@ -408,101 +432,73 @@ class StratumClient(object):
                'error': None,
                'id': self.msg_id}
         self.subscribed = True
-        logger.debug("Sending subscribe response: {}".format(pformat(ret)))
+        self.logger.debug("Sending subscribe response: {}".format(pformat(ret)))
         self.write_queue.put(json.dumps(ret) + "\n")
 
     def read_loop(self):
-        # do a finally call to cleanup when we exit
-        try:
-            while True:
-                line = with_timeout(self.config['push_job_interval'],
-                                    self.fp.readline,
-                                    timeout_value='timeout')
+        while True:
+            if self._disconnected:
+                break
 
-                # push a new job every timeout seconds if requested
-                if line == 'timeout':
-                    logger.debug("Pushing new job to client {} after timeout"
-                                 .format(self.id))
-                    if self.authenticated is True:
-                        self.push_job()
+            line = with_timeout(self.config['push_job_interval'],
+                                self.fp.readline,
+                                timeout_value='timeout')
+
+            # push a new job every timeout seconds if requested
+            if line == 'timeout':
+                self.logger.debug("Pushing new job to client {} after timeout"
+                                  .format(self.id))
+                if self.authenticated is True:
+                    self.push_job()
+                continue
+
+            line = line.strip()
+
+            # if there's data to read, parse it as json
+            if line:
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    self.self.logger.debug("Data {} not JSON".format(line))
+                    self.send_error()
                     continue
+            else:
+                self.send_error()
+                sleep(1)
+                continue
 
-                line = line.strip()
+            # set the msgid
+            self.msg_id = data.get('id', 1)
+            self.logger.debug("Data {} recieved on client {}".format(data, self.id))
 
-                # if there's data to read, parse it as json
-                if line:
-                    try:
-                        data = json.loads(line)
-                    except ValueError:
-                        logger.debug("Data {} not JSON".format(line))
+            if 'method' in data:
+                meth = data['method'].lower()
+                if meth == 'mining.subscribe':
+                    if self.subscribed is True:
                         self.send_error()
                         continue
-                else:
-                    self.send_error()
-                    sleep(1)
-                    continue
 
-                # set the msgid
-                self.msg_id = data.get('id', 1)
-                logger.debug("Data {} recieved on client {}".format(data, self.id))
+                    self.subscribe(data)
+                elif meth == "mining.authorize":
+                    if self.subscribed is False:
+                        self.send_error(25)
+                        continue
+                    if self.authenticated is True:
+                        self.send_error()
+                        continue
 
-                if 'method' in data:
-                    meth = data['method'].lower()
-                    if meth == 'mining.subscribe':
-                        if self.subscribed is True:
-                            self.send_error()
-                            continue
+                    self.authenticate(data)
+                elif meth == "mining.submit":
+                    if self.authenticated is False:
+                        self.send_error(24)
+                        continue
 
-                        self.subscribe(data)
-                    elif meth == "mining.authorize":
-                        if self.subscribed is False:
-                            self.send_error(25)
-                            continue
-                        if self.authenticated is True:
-                            self.send_error()
-                            continue
+                    res = self.submit_job(data)
+                    if res:
+                        self.log_share(res)
+            else:
+                self.logger.warn("Unkown action for command {}".format(data))
+                self.send_error()
 
-                        self.authenticate(data)
-                    elif meth == "mining.submit":
-                        if self.authenticated is False:
-                            self.send_error(24)
-                            continue
-
-                        res = self.submit_job(data)
-                        if res:
-                            self.log_share(res)
-                else:
-                    logger.warn("Unkown action for command {}".format(data))
-                    self.send_error()
-
-            self.sock.shutdown(socket.SHUT_WR)
-            self.sock.close()
-        except socket.error:
-            pass
-        except Exception:
-            logger.error("Unhandled exception!", exc_info=True)
-        finally:
-            self.report_shares(flush=True)
-            self.server_state['stratum_disconnects'].incr()
-            del self.stratum_clients[self.id]
-            addr_worker = (self.address, self.worker)
-            # clear the worker from the luts
-            try:
-                del self.stratum_clients['addr_worker_lut'][addr_worker]
-            except KeyError:
-                pass
-            try:
-                # remove from lut for address
-                self.stratum_clients['address_lut'][self.address].remove(self)
-                # delete the list if its empty
-                if not len(self.stratum_clients['address_lut'][self.address]):
-                    del self.stratum_clients['address_lut'][self.address]
-            except (ValueError, KeyError):
-                pass
-
-        logger.info("Closing connection for client {}".format(self.id))
-
-    def write_loop(self):
-        for item in self.write_queue:
-            self.fp.write(item)
-            self.fp.flush()
+        self.sock.shutdown(socket.SHUT_WR)
+        self.sock.close()

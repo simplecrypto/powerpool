@@ -60,6 +60,14 @@ def clients():
     return jsonify(clients=clients)
 
 
+@monitor_app.route('/agents')
+def agents():
+    agent_clients = monitor_app.config['agent_clients']
+    agents = {key: value.summary for key, value in agent_clients.iteritems()}
+
+    return jsonify(agents=agents)
+
+
 @monitor_app.route('/memory')
 def memory():
     def total_size(o, handlers={}):
