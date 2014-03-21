@@ -73,6 +73,8 @@ class StratumClient(GenericClient):
         VALID_SHARE: 'valid_shares'
     }
 
+    tiers = [16, 32, 64, 96, 128, 192, 256]
+
     def __init__(self, sock, address, id, stratum_clients, config, net_state,
                  server_state, celery):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
@@ -116,6 +118,10 @@ class StratumClient(GenericClient):
         self.dup_shares = {}
         self.stale_shares = {}
         self.low_diff_shares = {}
+        # an index of jobs and their difficulty
+        self.job_mapper = {}
+        # last time the difficulty was changed
+        self.diff_change = None
         # last time we sent graphing data to the server
         self.last_graph_transmit = 0
         self.difficulty = self.config['start_difficulty']
@@ -203,6 +209,7 @@ class StratumClient(GenericClient):
         """ Pushes the current difficulty to the client. Currently this
         only happens uppon initial connect, but would be used for vardiff
         """
+        self.diff_change = int(time())
         send = {'params': [self.difficulty],
                 'id': None,
                 'method': 'mining.set_difficulty'}
@@ -223,7 +230,11 @@ class StratumClient(GenericClient):
                 self.logger.debug("No jobs available for worker!")
                 sleep(0.5)
 
+        new_job_id = sha1(urandom(4)).hexdigest()
+        self.job_mapper[new_job_id] = (self.difficulty, jobid)
+
         send_params = job.stratum_params() + [flush]
+        send_params[0] = new_job_id
         # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
         # 5: version 6: nbits 7: ntime 8: clean_jobs
         self.logger.debug(
@@ -251,11 +262,14 @@ class StratumClient(GenericClient):
                 *params,
                 int_nonce=unpack(str("<L"), unhexlify(params[4]))))
 
-        job = self.net_state['jobs'].get(data['params'][1])
-        if not job:
+        try:
+            difficulty, jobid = self.job_mapper[data['params'][1]]
+            job = self.net_state['jobs'][jobid]
+        except KeyError:
             # stale job
-            self.send_error(self.STALE_SHARE)
-            self.server_state['reject_stale'].incr(self.difficulty)
+            send_error(self.STALE_SHARE)
+            # TODO: should really try to use the correct diff
+            self.server_state['reject_stale'].incr(state['difficulty'])
             return self.STALE_SHARE
 
         header = job.block_header(
@@ -270,15 +284,15 @@ class StratumClient(GenericClient):
         if share in job.acc_shares:
             self.logger.info("Duplicate share!")
             self.send_error(self.DUP_SHARE)
-            self.server_state['reject_dup'].incr(self.difficulty)
+            self.server_state['reject_dup'].incr(difficulty)
             return self.DUP_SHARE
 
-        job_target = target_from_diff(self.difficulty, self.config['diff1'])
+        job_target = target_from_diff(difficulty, self.config['diff1'])
         hash_int = self.config['pow_func'](header)
         if hash_int >= job_target:
             self.logger.debug("Low diff share!")
             self.send_error(self.LOW_DIFF)
-            self.server_state['reject_low'].incr(self.difficulty)
+            self.server_state['reject_low'].incr(difficulty)
             return self.LOW_DIFF
 
         # we want to send an ack ASAP, so do it here
@@ -286,8 +300,8 @@ class StratumClient(GenericClient):
         self.logger.debug("Valid job accepted!")
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
-        self.server_state['shares'].incr(self.difficulty)
-        self.celery.send_task_pp('add_share', self.address, self.difficulty)
+        self.server_state['shares'].incr(difficulty)
+        self.celery.send_task_pp('add_share', self.address, difficulty)
 
         # valid network hash?
         if hash_int >= job.bits_target:
