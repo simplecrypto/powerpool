@@ -8,7 +8,6 @@ from time import time
 from binascii import hexlify, unhexlify
 from struct import pack, unpack
 from bitcoinrpc import CoinRPCException
-from cryptokit.block import scrypt_int
 from cryptokit import target_from_diff
 from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
@@ -179,36 +178,6 @@ class StratumClient(GenericClient):
                     address=self.address,
                     connection_time=self.connection_time_dt)
 
-    def convert_username(self, username):
-        # if the address they passed is a valid address,
-        # use it. Otherwise use the pool address
-        bits = username.split('.', 1)
-        username = bits[0]
-        worker = ''
-        if len(bits) > 1:
-            self.logger.debug("Registering worker name {}".format(bits[1]))
-            worker = bits[1][:16]
-        try:
-            version = get_bcaddress_version(username)
-        except Exception:
-            version = False
-
-        if version:
-            address = username
-        else:
-            filtered = re.sub('[\W_]+', '', username).lower()
-            self.logger.debug(
-                "Invalid address passed in, checking aliases against {}"
-                .format(filtered))
-            if filtered in self.config['aliases']:
-                address = self.config['aliases'][filtered]
-                self.logger.debug("Setting address alias to {}".format(address))
-            else:
-                address = self.config['donate_address']
-                self.logger.debug("Falling back to donate address {}".format(address))
-
-        return address, worker
-
     # watch for new block announcements and push accordingly
     def new_block_call(self, event):
         """ An event triggered by the network monitor when it learns of a
@@ -305,7 +274,7 @@ class StratumClient(GenericClient):
             return self.DUP_SHARE
 
         job_target = target_from_diff(self.difficulty, self.config['diff1'])
-        hash_int = scrypt_int(header)
+        hash_int = self.config['pow_func'](header)
         if hash_int >= job_target:
             self.logger.debug("Low diff share!")
             self.send_error(self.LOW_DIFF)

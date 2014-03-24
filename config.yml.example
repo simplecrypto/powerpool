@@ -14,6 +14,8 @@ celery_task_prefix: simpledoge.tasks
 # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
 # sha...
 #diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
+# The function used to compute proof of work. Options are scrypt, vert_scrypt
+#pow_func: scrypt
 
 # port and address to listen on for stratum server
 #stratum:

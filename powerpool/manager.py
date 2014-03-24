@@ -138,6 +138,7 @@ def main():
                          'timeout': 120,
                          'enabled': False,
                          'accepted_types': ['temp', 'status', 'hashrate', 'thresholds']},
+                  pow_func='ltc_scrypt',
                   aliases={},
                   block_poll=0.2,
                   job_generate_int=75,
@@ -159,6 +160,17 @@ def main():
                 d[k] = u[k]
         return d
     update(config, add_config)
+
+    # setup the pow function
+    if config['pow_func'] == 'scrypt':
+        from cryptokit.block import scrypt_int
+        config['pow_func'] = scrypt_int
+    elif config['pow_func'] == 'vert_scrypt':
+        from cryptokit.block import vert_scrypt_int
+        config['pow_func'] = vert_scrypt_int
+    else:
+        logger.error("pow_func option not valid!")
+        exit()
 
     # setup our celery agent
     celery = Celery()
