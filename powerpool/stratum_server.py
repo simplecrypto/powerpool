@@ -223,7 +223,7 @@ class StratumClient(GenericClient):
                 job = self.net_state['jobs'][jobid]
                 break
             except KeyError:
-                self.logger.debug("No jobs available for worker!")
+                self.logger.warn("No jobs available for worker!")
                 sleep(0.5)
 
         new_job_id = sha1(urandom(4)).hexdigest()
@@ -233,8 +233,9 @@ class StratumClient(GenericClient):
         send_params[0] = new_job_id
         # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
         # 5: version 6: nbits 7: ntime 8: clean_jobs
+        self.logger.info("Sending job id {} to worker {}".format(jobid, self.id))
         self.logger.debug(
-            "Sending new job to worker\n\tjob_id: {0}\n\tprevhash: {1}"
+            "Worker job details\n\tjob_id: {0}\n\tprevhash: {1}"
             "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
             "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
             "\n\tclean_jobs: {8}\n"
@@ -286,14 +287,14 @@ class StratumClient(GenericClient):
         job_target = target_from_diff(difficulty, self.config['diff1'])
         hash_int = self.config['pow_func'](header)
         if hash_int >= job_target:
-            self.logger.debug("Low diff share!")
+            self.logger.info("Low diff share from worker {}!".format(self.id))
             self.send_error(self.LOW_DIFF)
             self.server_state['reject_low'].incr(difficulty)
             return self.LOW_DIFF
 
         # we want to send an ack ASAP, so do it here
         self.send_success(self.msg_id)
-        self.logger.debug("Valid job accepted!")
+        self.logger.info("Valid job accepted from worker {}!".format(self.id))
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.server_state['shares'].incr(difficulty)
@@ -304,31 +305,38 @@ class StratumClient(GenericClient):
             return self.VALID_SHARE
 
         self.logger.log(35, "Valid network block identified!")
-        block = job.submit_serial(header)
+        self.logger.info("New block at height %i" % self.net_state['current_height'])
+        self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
+        block = hexlify(job.submit_serial(header))
+        self.logger.log(35, "New block hex dump:\n{}".format(block))
         for conn in self.net_state['live_connections']:
-            try:
-                res = conn.submitblock(hexlify(block))
-            except (CoinRPCException, socket.error, ValueError) as e:
-                self.logger.error("Block failed to submit to the server!", exc_info=True)
-                self.logger.warn(getattr(e, 'error'))
-            else:
-                if res is None:
-                    hash_hex = hexlify(
-                        sha256(sha256(header).digest()).digest()[::-1])
-                    self.celery.send_task_pp(
-                        'add_block',
-                        self.address,
-                        self.net_state['current_height'] + 1,
-                        job.total_value,
-                        job.fee_total,
-                        hexlify(job.bits),
-                        hash_hex)
-                    self.logger.info("NEW BLOCK ACCEPTED!!!")
-                    self.logger.info("New block at height %i" % self.net_state['current_height'])
-                    self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
-                    self.server_state['block_solve'] = int(time())
-                else:
+            retries = 0
+            while retries < 5:
+                try:
+                    res = conn.submitblock(block)
+                except (CoinRPCException, socket.error, ValueError) as e:
                     self.logger.error("Block failed to submit to the server!", exc_info=True)
+                    self.logger.error(getattr(e, 'error'))
+                else:
+                    if res is None:
+                        hash_hex = hexlify(
+                            sha256(sha256(header).digest()).digest()[::-1])
+                        self.celery.send_task_pp(
+                            'add_block',
+                            self.address,
+                            self.net_state['current_height'] + 1,
+                            job.total_value,
+                            job.fee_total,
+                            hexlify(job.bits),
+                            hash_hex)
+                        self.logger.info("NEW BLOCK ACCEPTED!!!")
+                        self.server_state['block_solve'] = int(time())
+                        break  # break retry loop if success
+                    else:
+                        self.logger.error(
+                            "Block failed to submit to the server, "
+                            "server returned {}!".format(res), exc_info=True)
+                retries += 1
 
         return self.BLOCK_FOUND
 
@@ -413,8 +421,8 @@ class StratumClient(GenericClient):
         mins = (time() - self.last_diff_adj) / 60
         spm = stot / mins
         spm_tar = self.config['vardiff']['spm_target']
-        self.logger.debug("VARDIFF: Calculated client {} SPM as {}"
-                          .format(self.id, spm))
+        self.logger.info("VARDIFF: Calculated client {} SPM as {}"
+                         .format(self.id, spm))
         if (spm > (spm_tar * self.config['vardiff']['historesis']) or
                 spm < (spm_tar / self.config['vardiff']['historesis'])):
             # ideal difficulty is the n1 shares they solved divided by target
@@ -424,7 +432,7 @@ class StratumClient(GenericClient):
             new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
             if new_diff != self.difficulty:
-                self.logger.debug(
+                self.logger.info(
                     "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
                 self.difficulty = new_diff
                 self.push_difficulty()
@@ -461,10 +469,10 @@ class StratumClient(GenericClient):
 
             # push a new job every timeout seconds if requested
             if line == 'timeout':
-                self.logger.debug("Pushing new job to client {} after timeout"
-                                  .format(self.id))
-                self.recalc_vardiff()
                 if self.authenticated is True:
+                    self.recalc_vardiff()
+                    self.logger.info("Pushing new job to client {} after timeout"
+                                     .format(self.id))
                     self.push_job()
                 continue
 

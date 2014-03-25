@@ -35,6 +35,7 @@ def monitor_runner(net_state, config, stratum_clients, server_state,
                                    stratum_clients=stratum_clients,
                                    agent_clients=agent_clients,
                                    server_state=server_state))
+    print monitor_app.debug
     wsgiserver = WSGIServer((config['monitor']['address'],
                              config['monitor']['port']), monitor_app)
     wsgiserver.start()

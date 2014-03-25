@@ -117,6 +117,8 @@ class AgentClient(GenericClient):
         # do a finally call to cleanup when we exit
         while True:
             if self._disconnected:
+                self.logger.info("Agent client {} write loop exited, exiting read loop"
+                                 .format(self.id))
                 break
 
             line = with_timeout(self.config['agent']['timeout'],
@@ -134,7 +136,7 @@ class AgentClient(GenericClient):
                 try:
                     data = json.loads(line)
                 except ValueError:
-                    self.logger.debug("Data {} not JSON".format(line))
+                    self.logger.info("Data {} not JSON".format(line))
                     self.send_error()
                     continue
             else:
@@ -191,7 +193,7 @@ class AgentClient(GenericClient):
                         self.send_error(35)
             else:
                 self.logger.info("Unkown action for command {}"
-                                    .format(data))
+                                 .format(data))
                 self.send_error()
 
         self.sock.shutdown(socket.SHUT_WR)
