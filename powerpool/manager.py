@@ -144,6 +144,10 @@ def main():
                   job_generate_int=75,
                   rpc_ping_int=2,
                   keep_share=600,
+                  vardiff={'historesis': 1.5,
+                           'interval': 400,
+                           'spm_target': 2.5,
+                           'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
                   celery={},
                   push_job_interval=30,
                   celery_task_prefix=None)
@@ -160,17 +164,6 @@ def main():
                 d[k] = u[k]
         return d
     update(config, add_config)
-
-    # setup the pow function
-    if config['pow_func'] == 'scrypt':
-        from cryptokit.block import scrypt_int
-        config['pow_func'] = scrypt_int
-    elif config['pow_func'] == 'vert_scrypt':
-        from cryptokit.block import vert_scrypt_int
-        config['pow_func'] = vert_scrypt_int
-    else:
-        logger.error("pow_func option not valid!")
-        exit()
 
     # setup our celery agent
     celery = Celery()
@@ -237,6 +230,17 @@ def main():
             log.setLevel(log_level)
 
     logger.debug(pformat(config))
+
+    # setup the pow function
+    if config['pow_func'] == 'ltc_scrypt':
+        from cryptokit.block import scrypt_int
+        config['pow_func'] = scrypt_int
+    elif config['pow_func'] == 'vert_scrypt':
+        from cryptokit.block import vert_scrypt_int
+        config['pow_func'] = vert_scrypt_int
+    else:
+        logger.error("pow_func option not valid!")
+        exit()
 
     # check that config has a valid address
     if (not get_bcaddress_version(config['pool_address']) or

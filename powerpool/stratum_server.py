@@ -1,8 +1,6 @@
 import json
 import socket
 import logging
-import re
-import datetime
 
 from time import time
 from binascii import hexlify, unhexlify
@@ -16,7 +14,6 @@ from gevent.queue import Queue
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
-from cryptokit.base58 import get_bcaddress_version
 
 from .server import GenericServer, GenericClient
 
@@ -73,12 +70,10 @@ class StratumClient(GenericClient):
         VALID_SHARE: 'valid_shares'
     }
 
-    tiers = [16, 32, 64, 96, 128, 192, 256]
-
     def __init__(self, sock, address, id, stratum_clients, config, net_state,
                  server_state, celery):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
-                    .format(address, sock))
+                         .format(address, sock))
 
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
@@ -123,7 +118,8 @@ class StratumClient(GenericClient):
         # last time the difficulty was changed
         self.diff_change = None
         # last time we sent graphing data to the server
-        self.last_graph_transmit = 0
+        self.last_graph_transmit = time()
+        self.last_diff_adj = time()
         self.difficulty = self.config['start_difficulty']
         self.connection_time = int(time())
         self.msg_id = None
@@ -267,9 +263,9 @@ class StratumClient(GenericClient):
             job = self.net_state['jobs'][jobid]
         except KeyError:
             # stale job
-            send_error(self.STALE_SHARE)
+            self.send_error(self.STALE_SHARE)
             # TODO: should really try to use the correct diff
-            self.server_state['reject_stale'].incr(state['difficulty'])
+            self.server_state['reject_stale'].incr(self.difficulty)
             return self.STALE_SHARE
 
         header = job.block_header(
@@ -381,6 +377,10 @@ class StratumClient(GenericClient):
                     stamp, self.worker, *shares[1:])
             self.last_graph_transmit = upper
 
+        # don't recalc their diff more often than interval
+        if now - self.last_diff_adj > self.config['vardiff']['interval']:
+            self.recalc_vardiff()
+
     def log_share(self, outcome):
         now = int(time())
         self.report_shares()
@@ -401,6 +401,38 @@ class StratumClient(GenericClient):
         self.send_success(self.msg_id)
         self.push_difficulty()
         self.push_job()
+
+    def recalc_vardiff(self):
+        n1 = 0
+        stot = 0
+        for stamp, shares in self.valid_shares.iteritems():
+            if stamp > self.last_diff_adj:
+                n1 += shares
+                stot += 1
+        # calculate shares per minute and load their current diff tier
+        mins = (time() - self.last_diff_adj) / 60
+        spm = stot / mins
+        spm_tar = self.config['vardiff']['spm_target']
+        self.logger.debug("VARDIFF: Calculated client {} SPM as {}"
+                          .format(self.id, spm))
+        if (spm > (spm_tar * self.config['vardiff']['historesis']) or
+                spm < (spm_tar / self.config['vardiff']['historesis'])):
+            # ideal difficulty is the n1 shares they solved divided by target
+            # shares per minute
+            ideal_diff = (n1 / mins) / spm_tar
+            # find the closest tier for them
+            new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+
+            if new_diff != self.difficulty:
+                self.logger.debug(
+                    "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
+                self.difficulty = new_diff
+                self.push_difficulty()
+            else:
+                self.logger.debug("VARDIFF: Not adjusting difficulty, already "
+                                  "close enough")
+
+        self.last_diff_adj = time()
 
     def subscribe(self, data):
         self.subscr_notify = sha1(urandom(4)).hexdigest()
@@ -431,6 +463,7 @@ class StratumClient(GenericClient):
             if line == 'timeout':
                 self.logger.debug("Pushing new job to client {} after timeout"
                                   .format(self.id))
+                self.recalc_vardiff()
                 if self.authenticated is True:
                     self.push_job()
                 continue

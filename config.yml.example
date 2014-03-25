@@ -22,6 +22,25 @@ celery_task_prefix: simpledoge.tasks
 #    port: 3333
 #    address: 0.0.0.0
 
+#vardiff:
+#    # the percentage that spm can be higher or lower without recomputing
+#    historesis: 1.5
+#    # the overal shares per minute we're targeting
+#    spm_target: 2.5
+#    # time between checks triggered from share submission in seconds
+#    interval: 400
+#    # the available share tiers
+#    tiers:
+#        - 8
+#        - 16
+#        - 32
+#        - 64
+#        - 96
+#        - 128
+#        - 192
+#        - 256
+#        - 512
+
 # server side size. synonymous with worker id
 #extranonce_serv_size: 8
 # size that clients will generate in bytes
