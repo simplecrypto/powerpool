@@ -25,7 +25,8 @@ def monitor_nodes(config, net_state):
                 .format(serv['username'],
                         serv['password'],
                         serv['address'],
-                        serv['port']))
+                        serv['port']),
+                pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
             connections.append(conn)
         while True:
             for serv, conn in zip(coinserv, connections):

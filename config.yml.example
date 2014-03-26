@@ -47,7 +47,7 @@ celery_task_prefix: simplecoin.tasks
 #extranonce_size: 4
 # what difficulty will the server start with? with no vardiff this is static
 # diff
-#start_difficulty: 16
+#start_difficulty: 128
 # time between sending latest job to workers when there is no new block
 #push_job_interval: 30
 

@@ -127,7 +127,7 @@ def main():
                   diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
                   loggers=[{'type': 'StreamHandler',
                             'level': 'DEBUG'}],
-                  start_difficulty=16,
+                  start_difficulty=128,
                   term_timeout=3,
                   monitor={'DEBUG': False,
                            'address': '127.0.0.1',
