@@ -10,7 +10,7 @@ coinserv:
 donate_address: ''
 # address that all blocks will go towards in escrow before sending to users
 pool_address: ''
-celery_task_prefix: simpledoge.tasks
+celery_task_prefix: simplecoin.tasks
 # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
 # sha...
 #diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
@@ -87,7 +87,8 @@ celery_task_prefix: simpledoge.tasks
 
 # this defines the celery options that get passed to the daemon. this should
 # define how to connect to the queue server, etc
-#celery: {}
+#celery: 
+#    CELERY_DEFAULT_QUEUE: simplecoin
 
 # Configures standard python loggers. type must be a logging handler provided
 # by python std lib. Future support for custom loggers would be great

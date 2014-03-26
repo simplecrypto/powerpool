@@ -35,7 +35,6 @@ def monitor_runner(net_state, config, stratum_clients, server_state,
                                    stratum_clients=stratum_clients,
                                    agent_clients=agent_clients,
                                    server_state=server_state))
-    print monitor_app.debug
     wsgiserver = WSGIServer((config['monitor']['address'],
                              config['monitor']['port']), monitor_app)
     wsgiserver.start()
@@ -149,7 +148,7 @@ def main():
                            'interval': 400,
                            'spm_target': 2.5,
                            'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
-                  celery={},
+                  celery={'CELERY_DEFAULT_QUEUE': 'simplecoin'},
                   push_job_interval=30,
                   celery_task_prefix=None)
     # override those defaults with a loaded yaml config

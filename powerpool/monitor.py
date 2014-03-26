@@ -20,7 +20,6 @@ def general():
     stratum_clients = monitor_app.config['stratum_clients']
     agent_clients = monitor_app.config['agent_clients']
     server_state = monitor_app.config['server_state']
-    print monitor_app.logger.handlers
 
     share_summary = server_state['shares'].summary()
     share_summary['megahashpersec'] = ((2 ** 16) * share_summary['min_total']) / 1000000 / 60.0

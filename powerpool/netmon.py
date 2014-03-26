@@ -60,7 +60,7 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
                 logger.debug("Signaling new block for client {}".format(idx))
                 client.new_block_event.set()
             except AttributeError:
-                logger.warn("No new block event attr on client!")
+                pass
 
     def update_pool(conn):
         try:
@@ -151,6 +151,8 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
                     net_state['jobs'].clear()
                     net_state['latest_job'] = None
                     bt_obj = update_pool(conn)
+                    if not bt_obj:
+                        continue
                     push_new_block()
                     if bt_obj is None:
                         logger.error("None returned from push_new_block after "
