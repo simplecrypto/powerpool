@@ -144,7 +144,8 @@ def main():
                   job_generate_int=75,
                   rpc_ping_int=2,
                   keep_share=600,
-                  vardiff={'historesis': 1.5,
+                  vardiff={'enabled': False,
+                           'historesis': 1.5,
                            'interval': 400,
                            'spm_target': 2.5,
                            'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
@@ -183,6 +184,7 @@ def main():
     # the network monitor stores the current coin network state here
     net_state = {
         # rpc connections in either state
+        'poll_connection': None,
         'live_connections': [],
         'down_connections': [],
         # current known height of blockchain. used to track if we

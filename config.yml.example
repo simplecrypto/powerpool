@@ -23,6 +23,8 @@ celery_task_prefix: simplecoin.tasks
 #    address: 0.0.0.0
 
 #vardiff:
+#    # should we use variable difficulty?
+#    enabled: False
 #    # the percentage that spm can be higher or lower without recomputing
 #    historesis: 1.5
 #    # the overal shares per minute we're targeting

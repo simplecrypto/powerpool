@@ -17,38 +17,71 @@ def monitor_nodes(config, net_state):
     """ Pings rpc interfaces periodically to see if they're up and makes the
     initial connection to coinservers. """
     coinserv = config['coinserv']
-    try:
-        connections = []
-        for serv in coinserv:
-            conn = bitcoinrpc.AuthServiceProxy(
-                "http://{0}:{1}@{2}:{3}/"
-                .format(serv['username'],
-                        serv['password'],
-                        serv['address'],
-                        serv['port']),
-                pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
-            connections.append(conn)
-        while True:
-            for serv, conn in zip(coinserv, connections):
-                try:
-                    conn.getinfo()
-                except Exception:
-                    if conn in net_state['live_connections']:
-                        net_state['live_connections'].remove(conn)
-                    if conn not in net_state['down_connections']:
-                        logger.info("Server at {} now reporting down"
-                                    .format(serv['address']), exc_info=True)
-                        net_state['down_connections'].append(conn)
-                else:
-                    if conn not in net_state['live_connections']:
-                        net_state['live_connections'].append(conn)
-                        logger.info("Connected to RPC Server {0}. Yay!"
-                                    .format(serv['address']))
-                    if conn in net_state['down_connections']:
-                        net_state['down_connections'].remove(conn)
-            sleep(config['rpc_ping_int'])
-    finally:
-        net_state = {}
+    for serv in coinserv:
+        conn = bitcoinrpc.AuthServiceProxy(
+            "http://{0}:{1}@{2}:{3}/"
+            .format(serv['username'],
+                    serv['password'],
+                    serv['address'],
+                    serv['port']),
+            pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
+        conn.config = serv
+        conn.name = "{}:{}".format(serv['address'], serv['port'])
+        net_state['down_connections'].append(conn)
+    while True:
+        remlist = []
+        for conn in net_state['down_connections']:
+            try:
+                conn.getinfo()
+            except Exception:
+                logger.info("RPC connection {} still down!".format(conn.name))
+                continue
+
+            net_state['live_connections'].append(conn)
+            remlist.append(conn)
+            logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
+            # if this connection has a higher priority than current
+            if net_state['poll_connection'] is not None:
+                curr_poll = net_state['poll_connection'].config['poll_priority']
+                if conn.config['poll_priority'] > curr_poll:
+                    logger.info("RPC connection {} has higher poll priority than "
+                                "current poll connection, switching...".format(conn.name))
+                    net_state['poll_connection'] = conn
+            else:
+                net_state['poll_connection'] = conn
+                logger.info("RPC connection {} defaulting poll connection"
+                            .format(conn.name))
+
+        for conn in remlist:
+            net_state['down_connections'].remove(conn)
+
+        sleep(config['rpc_ping_int'])
+
+
+def down_connection(conn, net_state):
+    """ Called when a connection goes down. Removes if from the list of live
+    connections and recomputes a new. """
+    if conn in net_state['live_connections']:
+        net_state['live_connections'].remove(conn)
+
+    if net_state['poll_connection'] is conn:
+        # find the next best poll connection
+        try:
+            net_state['poll_connection'] = min(net_state['live_connections'],
+                                               key=lambda x: x.config['poll_priority'])
+        except ValueError:
+            net_state['poll_connection'] = None
+            logger.error("No RPC connections available for polling!!!"
+                         .format(net_state['poll_connection'].name,
+                                 conn.name))
+        else:
+            logger.warn("RPC connection {} switching to poll_connection after {} went down!"
+                        .format(net_state['poll_connection'].name,
+                                conn.name))
+
+    if conn not in net_state['down_connections']:
+        logger.info("Server at {} now reporting down".format(conn.name))
+        net_state['down_connections'].append(conn)
 
 
 def monitor_network(stratum_clients, net_state, config, server_state, celery):
@@ -76,8 +109,8 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
                 'prevblock',
             ]})
         except Exception:
-            logger.warn("Failed to fetch new job when attempting, RPC must be "
-                        "down..", exc_info=True)
+            logger.warn("Failed to fetch new job, RPC must be down..")
+            down_connection(conn, net_state)
             return False
         dirty = 0   # track a change in the transaction pool
         for trans in bt['transactions']:
@@ -122,58 +155,51 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
         try:
             height = conn.getblockcount()
         except Exception:
-            logger.warn(
-                "Unable to communicate with server that thinks it's live.")
+            logger.warn("Unable to communicate with server that thinks it's live.")
+            down_connection(conn, net_state)
             return False
+
         if net_state['current_height'] != height:
             net_state['current_height'] = height
             return True
         return False
 
-    try:
-        i = 0
-        while True:
-            try:
-                try:
-                    conn = net_state['live_connections'][0]
-                except IndexError:
-                    logger.info(
-                        "Couldn't connect to any RPC servers, sleeping for {}"
-                        .format(1))
-                    sleep(1)
+    i = 0
+    while True:
+        try:
+            conn = net_state['poll_connection']
+            if conn is None:
+                logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+                sleep(1)
+                continue
+
+            # if there's a new block registered
+            if check_height(conn):
+                # dump the current transaction pool, refresh and push the
+                # event
+                logger.debug("New block announced! Wiping previous jobs...")
+                net_state['transactions'].clear()
+                net_state['jobs'].clear()
+                net_state['latest_job'] = None
+                bt_obj = update_pool(conn)
+                if not bt_obj:
                     continue
-
-                # if there's a new block registered
-                if check_height(conn):
-                    # dump the current transaction pool, refresh and push the
-                    # event
-                    logger.debug("New block announced! Wiping previous jobs...")
-                    net_state['transactions'].clear()
-                    net_state['jobs'].clear()
-                    net_state['latest_job'] = None
-                    bt_obj = update_pool(conn)
-                    if not bt_obj:
-                        continue
-                    push_new_block()
-                    if bt_obj is None:
-                        logger.error("None returned from push_new_block after "
-                                     "clearning jobs...")
-                    else:
-                        hex_bits = hexlify(bt_obj.bits)
-                        celery.send_task_pp('new_block', bt_obj.block_height, hex_bits, bt_obj.total_value)
-                        net_state['difficulty'] = bits_to_difficulty(hex_bits)
+                push_new_block()
+                if bt_obj is None:
+                    logger.error("None returned from push_new_block after "
+                                 "clearning jobs...")
                 else:
-                    # check for new transactions when count intervals have
-                    # passed
-                    if i >= config['job_generate_int']:
-                        i = 0
-                        update_pool(conn)
-                    i += 1
-            except Exception:
-                logger.error("Unhandled exception!", exc_info=True)
-                pass
+                    hex_bits = hexlify(bt_obj.bits)
+                    celery.send_task_pp('new_block', bt_obj.block_height, hex_bits, bt_obj.total_value)
+                    net_state['difficulty'] = bits_to_difficulty(hex_bits)
+            else:
+                # check for new transactions when count interval has passed
+                if i >= config['job_generate_int']:
+                    i = 0
+                    update_pool(conn)
+                i += 1
+        except Exception:
+            logger.error("Unhandled exception!", exc_info=True)
+            pass
 
-            sleep(config['block_poll'])
-
-    finally:
-        net_state = {}
+        sleep(config['block_poll'])

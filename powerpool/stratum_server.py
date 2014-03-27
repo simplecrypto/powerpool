@@ -233,7 +233,8 @@ class StratumClient(GenericClient):
         send_params[0] = new_job_id
         # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
         # 5: version 6: nbits 7: ntime 8: clean_jobs
-        self.logger.info("Sending job id {} to worker {}".format(jobid, self.id))
+        self.logger.info("Sending job id {} to worker {}.{}"
+                         .format(jobid, self.address, self.worker))
         self.logger.debug(
             "Worker job details\n\tjob_id: {0}\n\tprevhash: {1}"
             "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
@@ -279,7 +280,8 @@ class StratumClient(GenericClient):
         # duplicates
         share = (self.id, params[2], params[4])
         if share in job.acc_shares:
-            self.logger.info("Duplicate share!")
+            self.logger.info("Duplicate share rejected from worker {}.{}!"
+                             .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE)
             self.server_state['reject_dup'].incr(difficulty)
             return self.DUP_SHARE
@@ -287,14 +289,16 @@ class StratumClient(GenericClient):
         job_target = target_from_diff(difficulty, self.config['diff1'])
         hash_int = self.config['pow_func'](header)
         if hash_int >= job_target:
-            self.logger.info("Low diff share from worker {}!".format(self.id))
+            self.logger.info("Low diff share rejected from worker {}.{}!"
+                             .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF)
             self.server_state['reject_low'].incr(difficulty)
             return self.LOW_DIFF
 
         # we want to send an ack ASAP, so do it here
         self.send_success(self.msg_id)
-        self.logger.info("Valid job accepted from worker {}!".format(self.id))
+        self.logger.info("Valid share accepted from worker {}.{}!"
+                         .format(self.address, self.worker))
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.server_state['shares'].incr(difficulty)
@@ -309,13 +313,18 @@ class StratumClient(GenericClient):
         self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
         block = hexlify(job.submit_serial(header))
         self.logger.log(35, "New block hex dump:\n{}".format(block))
-        for conn in self.net_state['live_connections']:
+        self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
+        for trans in job.transactions:
+            self.logger.log(35, str(trans.to_dict()))
+
+        def submit_block(conn):
             retries = 0
             while retries < 5:
                 try:
                     res = conn.submitblock(block)
                 except (CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.error("Block failed to submit to the server!", exc_info=True)
+                    self.logger.error("Block failed to submit to the server {}!"
+                                      .format(conn.name), exc_info=True)
                     self.logger.error(getattr(e, 'error'))
                 else:
                     if res is None:
@@ -329,14 +338,20 @@ class StratumClient(GenericClient):
                             job.fee_total,
                             hexlify(job.bits),
                             hash_hex)
-                        self.logger.info("NEW BLOCK ACCEPTED!!!")
+                        self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
+                                         .format(conn.name))
                         self.server_state['block_solve'] = int(time())
                         break  # break retry loop if success
                     else:
                         self.logger.error(
-                            "Block failed to submit to the server, "
-                            "server returned {}!".format(res), exc_info=True)
+                            "Block failed to submit to the server {}, "
+                            "server returned {}!".format(conn.name, res),
+                            exc_info=True)
                 retries += 1
+        for conn in self.net_state['live_connections']:
+            # spawn a new greenlet for each submission to do them all async.
+            # lower orphan chance
+            spawn(submit_block, conn)
 
         return self.BLOCK_FOUND
 
@@ -386,7 +401,8 @@ class StratumClient(GenericClient):
             self.last_graph_transmit = upper
 
         # don't recalc their diff more often than interval
-        if now - self.last_diff_adj > self.config['vardiff']['interval']:
+        if (self.config['vardiff']['enabled'] and
+            now - self.last_diff_adj > self.config['vardiff']['interval']):
             self.recalc_vardiff()
 
     def log_share(self, outcome):
@@ -470,9 +486,10 @@ class StratumClient(GenericClient):
             # push a new job every timeout seconds if requested
             if line == 'timeout':
                 if self.authenticated is True:
-                    self.recalc_vardiff()
-                    self.logger.info("Pushing new job to client {} after timeout"
-                                     .format(self.id))
+                    if self.config['vardiff']['enabled']:
+                        self.recalc_vardiff()
+                    self.logger.info("Pushing new job to client {}.{} after timeout"
+                                     .format(self.address, self.worker))
                     self.push_job()
                 continue
 
