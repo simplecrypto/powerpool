@@ -153,8 +153,9 @@ class AgentClient(GenericClient):
                     if self.client_version is not None:
                         self.send_error(32)
                         continue
-
                     self.client_version = data.get('params', [0.1])[0]
+                    self.logger.info("Agent {} identified as version {}"
+                                     .format(self.id, self.client_version))
                 elif meth == 'worker.authenticate':
                     if self.client_version is None:
                         self.send_error(33)
@@ -169,6 +170,8 @@ class AgentClient(GenericClient):
                     # here's where we do some top security checking...
                     self.authed[username] = user_worker
                     self.send_success()
+                    self.logger.info("Agent {} authenticated worker {}"
+                                     .format(self.id, username))
                 elif meth == "stats.submit":
                     if self.client_version is None:
                         self.send_error(33)
@@ -189,6 +192,8 @@ class AgentClient(GenericClient):
                         self.celery.send_task_pp(
                             'agent_receive', address, worker, typ, data, stamp)
                         self.send_success()
+                        self.logger.info("Agent {} transmitted payload for worker {}.{} of type {} and length {}"
+                                         .format(self.id, address, worker, typ, len(line)))
                     else:
                         self.send_error(35)
             else:
