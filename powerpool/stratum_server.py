@@ -317,7 +317,6 @@ class StratumClient(GenericClient):
             self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
             for trans in job.transactions:
                 self.logger.log(35, str(trans.to_dict()))
-            raise Exception()
         except Exception:
             # because I'm paranoid...
             self.logger.error("Unexcpected exception in block logging!", exc_info=True)
@@ -507,7 +506,7 @@ class StratumClient(GenericClient):
                 try:
                     data = json.loads(line)
                 except ValueError:
-                    self.self.logger.debug("Data {} not JSON".format(line))
+                    self.logger.debug("Data {} not JSON".format(line))
                     self.send_error()
                     continue
             else:
