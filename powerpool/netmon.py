@@ -71,13 +71,10 @@ def down_connection(conn, net_state):
                                                key=lambda x: x.config['poll_priority'])
         except ValueError:
             net_state['poll_connection'] = None
-            logger.error("No RPC connections available for polling!!!"
-                         .format(net_state['poll_connection'].name,
-                                 conn.name))
+            logger.error("No RPC connections available for polling!!!")
         else:
             logger.warn("RPC connection {} switching to poll_connection after {} went down!"
-                        .format(net_state['poll_connection'].name,
-                                conn.name))
+                        .format(net_state['poll_connection'].name, conn.name))
 
     if conn not in net_state['down_connections']:
         logger.info("Server at {} now reporting down".format(conn.name))
