@@ -130,12 +130,15 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
             coinbase.inputs.append(
                 Input.coinbase(bt['height'], b'\0' * extranonce_length))
             # simple output to the proper address and value
+            fees = 0
+            for t in net_state['transactions'].itervalues():
+                fees += t.fees
             coinbase.outputs.append(
-                Output.to_address(bt['coinbasevalue'], config['pool_address']))
+                Output.to_address(bt['coinbasevalue'] - fees, config['pool_address']))
             job_id = hexlify(pack(str("I"), net_state['job_counter']))
-            bt_obj = BlockTemplate.from_gbt(
-                bt, coinbase, extranonce_length,
-                copy(net_state['transactions'].values()))
+            logger.info("Generating new block template with {} trans"
+                        .format(len(net_state['transactions'])))
+            bt_obj = BlockTemplate.from_gbt(bt, coinbase, extranonce_length, [])
             bt_obj.job_id = job_id
             bt_obj.block_height = bt['height']
             bt_obj.acc_shares = set()
