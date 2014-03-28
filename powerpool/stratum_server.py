@@ -308,14 +308,19 @@ class StratumClient(GenericClient):
         if hash_int >= job.bits_target:
             return self.VALID_SHARE
 
-        self.logger.log(35, "Valid network block identified!")
-        self.logger.info("New block at height %i" % self.net_state['current_height'])
-        self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
-        block = hexlify(job.submit_serial(header))
-        self.logger.log(35, "New block hex dump:\n{}".format(block))
-        self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
-        for trans in job.transactions:
-            self.logger.log(35, str(trans.to_dict()))
+        try:
+            self.logger.log(35, "Valid network block identified!")
+            self.logger.info("New block at height %i" % self.net_state['current_height'])
+            self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
+            block = hexlify(job.submit_serial(header))
+            self.logger.log(35, "New block hex dump:\n{}".format(block))
+            self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
+            for trans in job.transactions:
+                self.logger.log(35, str(trans.to_dict()))
+            raise Exception()
+        except Exception:
+            # because I'm paranoid...
+            self.logger.error("Unexcpected exception in block logging!", exc_info=True)
 
         def submit_block(conn):
             retries = 0
@@ -348,6 +353,8 @@ class StratumClient(GenericClient):
                             "server returned {}!".format(conn.name, res),
                             exc_info=True)
                 retries += 1
+                sleep(1)
+                self.logger.info("Retry {} for connection {}".format(retries, conn.name))
         for conn in self.net_state['live_connections']:
             # spawn a new greenlet for each submission to do them all async.
             # lower orphan chance
