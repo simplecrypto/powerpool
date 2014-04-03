@@ -476,11 +476,10 @@ class StratumClient(GenericClient):
     def recalc_vardiff(self):
         # calculate shares per minute and load their current diff tier
         mins = (time() - self.connection_time) / 60
-        n1 = self.accepted_shares / mins
-        spm_tar = self.config['vardiff']['spm_target']
         # ideal difficulty is the n1 shares they solved divided by target
         # shares per minute
-        ideal_diff = (n1 / mins) / spm_tar
+        spm_tar = self.config['vardiff']['spm_target']
+        ideal_diff = self.accepted_shares / mins / spm_tar
         self.logger.info("VARDIFF: Calculated client {} ideal diff {}"
                          .format(self.id, ideal_diff))
         # find the closest tier for them
