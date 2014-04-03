@@ -1,6 +1,7 @@
 import json
 import socket
 import logging
+import argparse
 
 from time import time
 from binascii import hexlify, unhexlify
@@ -16,6 +17,19 @@ from os import urandom
 from pprint import pformat
 
 from .server import GenericServer, GenericClient
+
+
+class ArgumentParserError(Exception):
+    pass
+
+
+class ThrowingArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ArgumentParserError(message)
+
+
+password_arg_parser = ThrowingArgumentParser()
+password_arg_parser.add_argument('-d', '--diff', type=int)
 
 
 class StratumServer(GenericServer):
@@ -113,6 +127,8 @@ class StratumClient(GenericClient):
         self.dup_shares = {}
         self.stale_shares = {}
         self.low_diff_shares = {}
+        # running total for vardiff
+        self.accepted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
         # last time the difficulty was changed
@@ -176,6 +192,7 @@ class StratumClient(GenericClient):
                     stale_shares=self.stale_shares,
                     low_diff_shares=self.low_diff_shares,
                     valid_shares=self.valid_shares,
+                    difficulty=self.difficulty,
                     worker=self.worker,
                     address=self.address,
                     connection_time=self.connection_time_dt)
@@ -217,6 +234,9 @@ class StratumClient(GenericClient):
         or not he should dump his previous jobs or not. Dump will occur
         when a new block is found since work on the old block is
         invalid."""
+        if flush:
+            self.job_mapper.clear()
+
         job = None
         while True:
             jobid = self.net_state['latest_job']
@@ -261,15 +281,15 @@ class StratumClient(GenericClient):
                 *params,
                 int_nonce=unpack(str("<L"), unhexlify(params[4]))))
 
+        difficulty = self.difficulty
         try:
             difficulty, jobid = self.job_mapper[data['params'][1]]
             job = self.net_state['jobs'][jobid]
         except KeyError:
             # stale job
             self.send_error(self.STALE_SHARE)
-            # TODO: should really try to use the correct diff
-            self.server_state['reject_stale'].incr(self.difficulty)
-            return self.STALE_SHARE
+            self.server_state['reject_stale'].incr(difficulty)
+            return self.STALE_SHARE, difficulty
 
         header = job.block_header(
             nonce=params[4],
@@ -285,7 +305,7 @@ class StratumClient(GenericClient):
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE)
             self.server_state['reject_dup'].incr(difficulty)
-            return self.DUP_SHARE
+            return self.DUP_SHARE, difficulty
 
         job_target = target_from_diff(difficulty, self.config['diff1'])
         hash_int = self.config['pow_func'](header)
@@ -294,7 +314,7 @@ class StratumClient(GenericClient):
                              .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF)
             self.server_state['reject_low'].incr(difficulty)
-            return self.LOW_DIFF
+            return self.LOW_DIFF, difficulty
 
         # we want to send an ack ASAP, so do it here
         self.send_success(self.msg_id)
@@ -307,7 +327,7 @@ class StratumClient(GenericClient):
 
         # valid network hash?
         if hash_int >= job.bits_target:
-            return self.VALID_SHARE
+            return self.VALID_SHARE, difficulty
 
         try:
             self.logger.log(35, "Valid network block identified!")
@@ -360,7 +380,7 @@ class StratumClient(GenericClient):
             # lower orphan chance
             spawn(submit_block, conn)
 
-        return self.BLOCK_FOUND
+        return self.BLOCK_FOUND, difficulty
 
     def report_shares(self, flush=False):
         """ Goes through the list of recorded shares and aggregates them
@@ -409,17 +429,35 @@ class StratumClient(GenericClient):
 
         # don't recalc their diff more often than interval
         if (self.config['vardiff']['enabled'] and
-            now - self.last_diff_adj > self.config['vardiff']['interval']):
+                now - self.last_diff_adj > self.config['vardiff']['interval']):
             self.recalc_vardiff()
 
-    def log_share(self, outcome):
+    def log_share(self, outcome, diff):
+        """ Handles logging of the share in its proper local counter. These
+        are then aggregated for shipment to celery in one minute chunks. """
         now = int(time())
         self.report_shares()
         key = self.outcome_to_idx[outcome]
         getattr(self, key).setdefault(now, 0)
-        getattr(self, key)[now] += self.difficulty
+        getattr(self, key)[now] += diff
+        if self.VALID_SHARE == outcome or self.BLOCK_FOUND == outcome:
+            self.accepted_shares += diff
 
     def authenticate(self, data):
+        try:
+            password = data.get('params', [None])[1]
+        except IndexError:
+            password = ""
+
+        # allow the user to use the password field as an argument field
+        try:
+            args = password_arg_parser.parse_args(password.split())
+        except ArgumentParserError:
+            pass
+        else:
+            if args.diff and args.diff in self.config['vardiff']['tiers']:
+                self.difficulty = args.diff
+
         username = data.get('params', [None])[0]
         self.logger.info("Authentication request from {} for username {}"
                          .format(self.peer_name[0], username))
@@ -436,34 +474,26 @@ class StratumClient(GenericClient):
         self.push_job()
 
     def recalc_vardiff(self):
-        n1 = 0
-        stot = 0
-        for stamp, shares in self.valid_shares.iteritems():
-            if stamp > self.last_diff_adj:
-                n1 += shares
-                stot += 1
         # calculate shares per minute and load their current diff tier
-        mins = (time() - self.last_diff_adj) / 60
-        spm = stot / mins
+        mins = (time() - self.connection_time) / 60
+        n1 = self.accepted_shares / mins
         spm_tar = self.config['vardiff']['spm_target']
-        self.logger.info("VARDIFF: Calculated client {} SPM as {}"
-                         .format(self.id, spm))
-        if (spm > (spm_tar * self.config['vardiff']['historesis']) or
-                spm < (spm_tar / self.config['vardiff']['historesis'])):
-            # ideal difficulty is the n1 shares they solved divided by target
-            # shares per minute
-            ideal_diff = (n1 / mins) / spm_tar
-            # find the closest tier for them
-            new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+        # ideal difficulty is the n1 shares they solved divided by target
+        # shares per minute
+        ideal_diff = (n1 / mins) / spm_tar
+        self.logger.info("VARDIFF: Calculated client {} ideal diff {}"
+                         .format(self.id, ideal_diff))
+        # find the closest tier for them
+        new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
-            if new_diff != self.difficulty:
-                self.logger.info(
-                    "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
-                self.difficulty = new_diff
-                self.push_difficulty()
-            else:
-                self.logger.debug("VARDIFF: Not adjusting difficulty, already "
-                                  "close enough")
+        if new_diff != self.difficulty:
+            self.logger.info(
+                "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
+            self.difficulty = new_diff
+            self.push_difficulty()
+        else:
+            self.logger.debug("VARDIFF: Not adjusting difficulty, already "
+                              "close enough")
 
         self.last_diff_adj = time()
 
@@ -543,9 +573,8 @@ class StratumClient(GenericClient):
                         self.send_error(24)
                         continue
 
-                    res = self.submit_job(data)
-                    if res:
-                        self.log_share(res)
+                    outcome, diff = self.submit_job(data)
+                    self.log_share(outcome, diff)
                 else:
                     self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
                     self.send_error()
