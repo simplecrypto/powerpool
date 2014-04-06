@@ -420,6 +420,8 @@ class StratumClient(GenericClient):
 
     def authenticate(self, data):
         username = data.get('params', [None])[0]
+        self.logger.info("Authentication request from {} for username {}"
+                         .format(self.peer_name[0], username))
         user_worker = self.convert_username(username)
         # setup lookup table for easier access from other read sources
         self.stratum_clients['addr_worker_lut'][user_worker] = self
