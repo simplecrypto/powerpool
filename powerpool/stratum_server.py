@@ -545,8 +545,11 @@ class StratumClient(GenericClient):
                     res = self.submit_job(data)
                     if res:
                         self.log_share(res)
+                else:
+                    self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
+                    self.send_error()
             else:
-                self.logger.warn("Unkown action for command {}".format(data))
+                self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
                 self.send_error()
 
         self.sock.shutdown(socket.SHUT_WR)
