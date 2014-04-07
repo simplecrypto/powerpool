@@ -192,7 +192,8 @@ class StratumClient(GenericClient):
         err = {'id': id_val,
                'result': None,
                'error': (num, self.errors[num], None)}
-        self.logger.debug("error response: {}".format(pformat(err)))
+        self.logger.warn("Error number {} on ip {}".format(num, self.peer_name[0]))
+        #self.logger.debug("error response: {}".format(pformat(err)))
         self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self, id_val=1):
@@ -508,11 +509,11 @@ class StratumClient(GenericClient):
                 try:
                     data = json.loads(line)
                 except ValueError:
-                    self.logger.debug("Data {} not JSON".format(line))
+                    self.logger.warn("Data {} not JSON".format(line))
                     self.send_error()
                     continue
             else:
-                self.send_error()
+                #self.send_error()
                 sleep(1)
                 continue
 
