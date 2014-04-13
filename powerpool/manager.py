@@ -240,6 +240,9 @@ def main():
     elif config['pow_func'] == 'vert_scrypt':
         from cryptokit.block import vert_scrypt_int
         config['pow_func'] = vert_scrypt_int
+    elif config['pow_func'] == 'darkcoin':
+        from cryptokit.block import drk_hash_int
+        config['pow_func'] = drk_hash_int
     else:
         logger.error("pow_func option not valid!")
         exit()
