@@ -131,12 +131,12 @@ class StratumClient(GenericClient):
         self.accepted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
-        # last time the difficulty was changed
-        self.diff_change = None
         # last time we sent graphing data to the server
         self.last_graph_transmit = time()
         self.last_diff_adj = time()
         self.difficulty = self.config['start_difficulty']
+        # the next diff to be used by push job
+        self.next_diff = self.config['start_difficulty']
         self.connection_time = int(time())
         self.msg_id = None
         self.fp = sock.makefile()
@@ -195,6 +195,7 @@ class StratumClient(GenericClient):
                     difficulty=self.difficulty,
                     worker=self.worker,
                     address=self.address,
+                    peer_name=self.peer_name[0],
                     connection_time=self.connection_time_dt)
 
     # watch for new block announcements and push accordingly
@@ -223,7 +224,6 @@ class StratumClient(GenericClient):
         """ Pushes the current difficulty to the client. Currently this
         only happens uppon initial connect, but would be used for vardiff
         """
-        self.diff_change = int(time())
         send = {'params': [self.difficulty],
                 'id': None,
                 'method': 'mining.set_difficulty'}
@@ -234,9 +234,6 @@ class StratumClient(GenericClient):
         or not he should dump his previous jobs or not. Dump will occur
         when a new block is found since work on the old block is
         invalid."""
-        if flush:
-            self.job_mapper.clear()
-
         job = None
         while True:
             jobid = self.net_state['latest_job']
@@ -246,6 +243,14 @@ class StratumClient(GenericClient):
             except KeyError:
                 self.logger.warn("No jobs available for worker!")
                 sleep(0.5)
+
+        # we push the next difficulty here instead of in the vardiff block to
+        # prevent a potential mismatch between client and server
+        if self.next_diff != self.difficulty:
+            self.logger.info("Pushing diff updae {} -> {} before job for {}.{}"
+                             .format(self.difficulty, self.next_diff, self.address, self.worker))
+            self.difficulty = self.next_diff
+            self.push_difficulty()
 
         new_job_id = sha1(urandom(4)).hexdigest()
         self.job_mapper[new_job_id] = (self.difficulty, jobid)
@@ -281,16 +286,25 @@ class StratumClient(GenericClient):
                 *params,
                 int_nonce=unpack(str("<L"), unhexlify(params[4]))))
 
-        difficulty = self.difficulty
         try:
             difficulty, jobid = self.job_mapper[data['params'][1]]
+        except KeyError:
+            # since we can't identify the diff we just have to assume it's
+            # current diff
+            self.send_error(self.STALE_SHARE)
+            self.server_state['reject_stale'].incr(self.difficulty)
+            return self.STALE_SHARE, self.difficulty
+
+        # lookup the job in the global job dictionary. If it's gone from here
+        # then a new block was announced which wiped it
+        try:
             job = self.net_state['jobs'][jobid]
         except KeyError:
-            # stale job
             self.send_error(self.STALE_SHARE)
             self.server_state['reject_stale'].incr(difficulty)
             return self.STALE_SHARE, difficulty
 
+        # assemble a complete block header bytestring
         header = job.block_header(
             nonce=params[4],
             extra1=self.id,
@@ -323,7 +337,6 @@ class StratumClient(GenericClient):
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.server_state['shares'].incr(difficulty)
-        self.celery.send_task_pp('add_share', self.address, difficulty)
 
         # valid network hash?
         if hash_int >= job.bits_target:
@@ -421,10 +434,15 @@ class StratumClient(GenericClient):
             for key, stamp in rem:
                 del getattr(self, key)[stamp]
 
+            valid = 0
             for stamp, shares in chunks.iteritems():
+                valid += shares[0]
                 self.celery.send_task_pp(
                     'add_one_minute', self.address, shares[0],
                     stamp, self.worker, *shares[1:])
+
+            if valid > 0:
+                self.celery.send_task_pp('add_share', self.address, valid)
             self.last_graph_transmit = upper
 
         # don't recalc their diff more often than interval
@@ -457,6 +475,7 @@ class StratumClient(GenericClient):
         else:
             if args.diff and args.diff in self.config['vardiff']['tiers']:
                 self.difficulty = args.diff
+                self.next_diff = args.diff
 
         username = data.get('params', [None])[0]
         self.logger.info("Authentication request from {} for username {}"
@@ -488,8 +507,7 @@ class StratumClient(GenericClient):
         if new_diff != self.difficulty:
             self.logger.info(
                 "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
-            self.difficulty = new_diff
-            self.push_difficulty()
+            self.next_diff = new_diff
         else:
             self.logger.debug("VARDIFF: Not adjusting difficulty, already "
                               "close enough")
