@@ -203,7 +203,9 @@ class StratumClient(GenericClient):
         """ An event triggered by the network monitor when it learns of a
         new block on the network. All old work is now useless so must be
         flushed. """
-        self.push_job(flush=True)
+        # only push jobs to authed workers...
+        if self.authenticated is True:
+            self.push_job(flush=True)
 
     def send_error(self, num=20, id_val=1):
         """ Utility for transmitting an error to the client """
