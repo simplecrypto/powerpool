@@ -233,6 +233,8 @@ def main():
             log.addHandler(ch)
             log.setLevel(log_level)
 
+    logger.info("=" * 80)
+    logger.info("PowerPool stratum server starting up...")
     logger.debug(pformat(config))
 
     # setup the pow function
@@ -323,3 +325,5 @@ def main():
                 logger.info("Cleanup complete, shutting down...")
         except KeyboardInterrupt:
             logger.info("Shutdown forced by system, exiting without cleanup")
+
+        logger.info("=" * 80)
