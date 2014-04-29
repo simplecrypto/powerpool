@@ -189,8 +189,12 @@ def monitor_network(stratum_clients, net_state, config, server_state, celery):
                     logger.error("None returned from push_new_block after "
                                  "clearning jobs...")
                 else:
-                    hex_bits = hexlify(bt_obj.bits)
-                    celery.send_task_pp('new_block', bt_obj.block_height, hex_bits, bt_obj.total_value)
+                    if config['send_new_block']:
+                        hex_bits = hexlify(bt_obj.bits)
+                        celery.send_task_pp('new_block',
+                                            bt_obj.block_height,
+                                            hex_bits,
+                                            bt_obj.total_value)
                     net_state['difficulty'] = bits_to_difficulty(hex_bits)
             else:
                 # check for new transactions when count interval has passed

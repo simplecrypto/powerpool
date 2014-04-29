@@ -52,6 +52,9 @@ celery_task_prefix: simplecoin.tasks
 #start_difficulty: 128
 # time between sending latest job to workers when there is no new block
 #push_job_interval: 30
+# Toggles wheter new_block tasks get send to celery. If you're running multiple
+# powerpools then only one needs to do this
+#send_new_block: True
 
 # time between checking live rpc for new blocks... lower means less stale
 # shares (in seconds)

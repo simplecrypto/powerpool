@@ -146,6 +146,7 @@ def main():
                   job_generate_int=75,
                   rpc_ping_int=2,
                   keep_share=600,
+                  send_new_block=True,
                   vardiff={'enabled': False,
                            'historesis': 1.5,
                            'interval': 400,
