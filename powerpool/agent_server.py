@@ -87,6 +87,8 @@ class AgentClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            self.sock.shutdown(socket.SHUT_WR)
+            self.sock.close()
             read_greenlet.kill()
             self.server_state['agent_disconnects'].incr()
             if self.client_state:
@@ -95,7 +97,7 @@ class AgentClient(GenericClient):
                 except KeyError:
                     pass
 
-        self.logger.info("Closing agent connection for client {}".format(self.id))
+            self.logger.info("Closing agent connection for client {}".format(self.id))
 
     @property
     def summary(self):
@@ -200,6 +202,3 @@ class AgentClient(GenericClient):
                 self.logger.info("Unkown action for command {}"
                                  .format(data))
                 self.send_error()
-
-        self.sock.shutdown(socket.SHUT_WR)
-        self.sock.close()

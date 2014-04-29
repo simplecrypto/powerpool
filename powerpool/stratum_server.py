@@ -157,6 +157,8 @@ class StratumClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            self.sock.shutdown(socket.SHUT_WR)
+            self.sock.close()
             read_greenlet.kill()
             self.report_shares(flush=True)
             self.server_state['stratum_disconnects'].incr()
@@ -604,6 +606,3 @@ class StratumClient(GenericClient):
             else:
                 self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
                 self.send_error()
-
-        self.sock.shutdown(socket.SHUT_WR)
-        self.sock.close()
