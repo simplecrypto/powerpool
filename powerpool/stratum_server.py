@@ -176,7 +176,7 @@ class StratumClient(GenericClient):
             except (ValueError, KeyError):
                 pass
 
-        self.logger.info("Closing connection for client {}".format(self.id))
+            self.logger.info("Closing connection for client {}".format(self.id))
 
     @property
     def summary(self):
@@ -405,7 +405,7 @@ class StratumClient(GenericClient):
         should flush all shares we know about. If False only shares up until
         the last complete minute will be reported. """
         now = int(time())
-        if (now - self.last_graph_transmit) > 90:
+        if (now - self.last_graph_transmit) > 90 or flush:
             # bounds for a share to be grouped for transmission in minute
             # chunks. the upper bound is the last minute that has
             # completely passed, while the lower bound is the last time we
@@ -440,9 +440,13 @@ class StratumClient(GenericClient):
                 self.celery.send_task_pp(
                     'add_one_minute', self.address, shares[0],
                     stamp, self.worker, *shares[1:])
+                self.logger.info("Logging one_minute for {}.{}"
+                                 .format(self.address, self.worker))
 
             if valid > 0:
                 self.celery.send_task_pp('add_share', self.address, valid)
+                self.logger.info("Entering {} shares for {}.{}"
+                                 .format(valid, self.address, self.worker))
             self.last_graph_transmit = upper
 
         # don't recalc their diff more often than interval

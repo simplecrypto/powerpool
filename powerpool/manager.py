@@ -7,6 +7,7 @@ from cryptokit.base58 import get_bcaddress_version
 from gevent import Greenlet
 from gevent.monkey import patch_all, patch_thread
 from gevent.wsgi import WSGIServer
+from gevent.pool import Pool
 patch_all(thread=False)
 # Patch our threading events so we can use thread safe event with gevent
 patch_thread(threading=False, _threading_local=False, Event=True)
@@ -103,7 +104,8 @@ def stratum_runner(net_state, config, stratum_clients, server_state, celery,
         config,
         net_state,
         server_state,
-        celery)
+        celery,
+        spawn=Pool())
     sserver.start()
     try:
         exit_event.wait()
@@ -314,6 +316,7 @@ def main():
         logger.info("Exiting requested via SIGINT, cleaning up...")
         try:
             net_thread.join(config['term_timeout'])
+            stratum_thread.join(config['term_timeout'])
             if net_thread.isAlive() or stratum_thread.isAlive():
                 logger.info("Timeout reached, exiting without cleanup")
             else:
