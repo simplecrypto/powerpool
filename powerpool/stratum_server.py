@@ -362,33 +362,42 @@ class StratumClient(GenericClient):
         def submit_block(conn):
             retries = 0
             while retries < 5:
+                res = "failed"
                 try:
-                    res = conn.submitblock(block)
+                    res = conn.getblocktemplate({'mode': 'submit',
+                                                 'data': block})
                 except (CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.error("Block failed to submit to the server {}!"
-                                      .format(conn.name), exc_info=True)
+                    self.logger.info("Block failed to submit to the server {} with submitblock!"
+                                     .format(conn.name), exc_info=True)
                     self.logger.error(getattr(e, 'error'))
+                    try:
+                        res = conn.submitblock(block)
+                    except (CoinRPCException, socket.error, ValueError) as e:
+                        self.logger.error("Block failed to submit to the server {}!"
+                                          .format(conn.name), exc_info=True)
+                        self.logger.error(getattr(e, 'error'))
+                        continue
+
+                if res is None:
+                    hash_hex = hexlify(
+                        sha256(sha256(header).digest()).digest()[::-1])
+                    self.celery.send_task_pp(
+                        'add_block',
+                        self.address,
+                        self.net_state['current_height'] + 1,
+                        job.total_value,
+                        job.fee_total,
+                        hexlify(job.bits),
+                        hash_hex)
+                    self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
+                                     .format(conn.name))
+                    self.server_state['block_solve'] = int(time())
+                    break  # break retry loop if success
                 else:
-                    if res is None:
-                        hash_hex = hexlify(
-                            sha256(sha256(header).digest()).digest()[::-1])
-                        self.celery.send_task_pp(
-                            'add_block',
-                            self.address,
-                            self.net_state['current_height'] + 1,
-                            job.total_value,
-                            job.fee_total,
-                            hexlify(job.bits),
-                            hash_hex)
-                        self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
-                                         .format(conn.name))
-                        self.server_state['block_solve'] = int(time())
-                        break  # break retry loop if success
-                    else:
-                        self.logger.error(
-                            "Block failed to submit to the server {}, "
-                            "server returned {}!".format(conn.name, res),
-                            exc_info=True)
+                    self.logger.error(
+                        "Block failed to submit to the server {}, "
+                        "server returned {}!".format(conn.name, res),
+                        exc_info=True)
                 retries += 1
                 sleep(1)
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
