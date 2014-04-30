@@ -157,8 +157,14 @@ class StratumClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            self.sock.shutdown(socket.SHUT_WR)
-            self.sock.close()
+            try:
+                self.sock.shutdown(socket.SHUT_WR)
+            except socket.error:
+                pass
+            try:
+                self.sock.close()
+            except socket.error:
+                pass
             read_greenlet.kill()
             self.report_shares(flush=True)
             self.server_state['stratum_disconnects'].incr()
