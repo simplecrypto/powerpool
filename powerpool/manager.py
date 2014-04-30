@@ -152,7 +152,7 @@ def main():
                            'interval': 400,
                            'spm_target': 2.5,
                            'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
-                  celery={'CELERY_DEFAULT_QUEUE': 'simplecoin'},
+                  celery={'CELERY_DEFAULT_QUEUE': 'celery'},
                   push_job_interval=30,
                   celery_task_prefix=None)
     # override those defaults with a loaded yaml config

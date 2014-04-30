@@ -93,7 +93,7 @@ celery_task_prefix: simplecoin.tasks
 # this defines the celery options that get passed to the daemon. this should
 # define how to connect to the queue server, etc
 #celery: 
-#    CELERY_DEFAULT_QUEUE: simplecoin
+#    CELERY_DEFAULT_QUEUE: celery
 
 # Configures standard python loggers. type must be a logging handler provided
 # by python std lib. Future support for custom loggers would be great
