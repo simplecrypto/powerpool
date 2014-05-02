@@ -248,6 +248,9 @@ def main():
     elif config['pow_func'] == 'darkcoin':
         from cryptokit.block import drk_hash_int
         config['pow_func'] = drk_hash_int
+    elif config['pow_func'] == 'sha256':
+        from cryptokit.block import sha256_int
+        config['pow_func'] = sha256_int
     else:
         logger.error("pow_func option not valid!")
         exit()

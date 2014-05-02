@@ -87,8 +87,14 @@ class AgentClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            self.sock.shutdown(socket.SHUT_WR)
-            self.sock.close()
+            try:
+                self.sock.shutdown(socket.SHUT_WR)
+            except socket.error:
+                pass
+            try:
+                self.sock.close()
+            except socket.error:
+                pass
             read_greenlet.kill()
             self.server_state['agent_disconnects'].incr()
             if self.client_state:
