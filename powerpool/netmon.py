@@ -173,8 +173,8 @@ class MonitorNetwork(Greenlet):
                 'transactions/remove',
                 'prevblock',
             ]})
-        except Exception:
-            logger.warn("Failed to fetch new job, RPC must be down..")
+        except Exception as e:
+            logger.warn("Failed to fetch new job. Reason: {}".format(e))
             down_connection(self.net_state['poll_connection'], self.net_state)
             return False
 
@@ -298,10 +298,17 @@ class MonitorAuxChain(Greenlet):
                 merged_proxy=self.coinserv
             )}
             if new_merged_work != self.net_state['merged_work']:
+                try:
+                    height = self.coinserv.getblockcount()
+                except Exception:
+                    logger.warn("Unable to communicate with aux chain server", exc_info=True)
+                    sleep(2)
+                    continue
                 logger.info("New aux work annocuned! Diff {}. RPC returned: {}"
                             .format(bitcoin_data.target_to_difficulty(new_merged_work.values()[0]['target']),
                                     new_merged_work))
                 self.net_state['merged_work'] = new_merged_work
+                self.net_state['aux_height'] = height
                 logger.info("New aux work announced! Wiping previous jobs...")
                 self.net_state['transactions'].clear()
                 self.net_state['jobs'].clear()

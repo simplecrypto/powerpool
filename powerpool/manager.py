@@ -201,6 +201,7 @@ def main():
         # current known height of blockchain. used to track if we
         # need to reset our mining clients
         'current_height': 0,
+        'aux_height': -1,
         # a collection of known transaction objects
         'transactions': {},
         # index of all jobs currently accepting work. Contains complete

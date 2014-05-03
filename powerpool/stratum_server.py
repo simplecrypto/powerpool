@@ -373,6 +373,7 @@ class StratumClient(GenericClient):
                 retries = 0
                 while retries < 5:
                     retries += 1
+                    new_height = self.net_state['aux_height'] + 1
                     try:
                         res = aux_work['merged_proxy'].getauxblock(*aux_block)
                     except (CoinRPCException, socket.error, ValueError) as e:
@@ -381,15 +382,29 @@ class StratumClient(GenericClient):
                         self.logger.error(getattr(e, 'error'))
 
                     if res is True:
-                        hash_hex = hexlify(header_hash)
+                        try:
+                            hsh = aux_work['merged_proxy'].getblockhash(new_height)
+                        except Exception:
+                            logger.info("", exc_info=True)
+                            hsh = ''
+                        try:
+                            block = aux_work['merged_proxy'].getblock(hsh)
+                        except Exception:
+                            logger.info("", exc_info=True)
+                        try:
+                            trans = aux_work['merged_proxy'].gettransaction(block['tx'][0])
+                            amount = trans['details'][0]['amount']
+                        except Exception:
+                            logger.info("", exc_info=True)
+                            amount = -1
                         self.celery.send_task_pp(
                             'add_block',
                             self.address,
-                            self.net_state['current_height'] + 1,
-                            job.total_value,
-                            job.fee_total,
-                            hexlify(job.bits),
-                            hash_hex,
+                            new_height,
+                            amount,
+                            -1,
+                            "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_work['target']).bits,
+                            hsh,
                             merged=True)
                         self.logger.info("NEW Aux BLOCK ACCEPTED!!!")
                         self.server_state['aux_block_solve'] = int(time())
