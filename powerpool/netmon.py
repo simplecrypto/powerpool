@@ -105,7 +105,7 @@ class MonitorNetwork(Greenlet):
                 if self.check_height():
                     # dump the current transaction pool, refresh and push the
                     # event
-                    logger.debug("New block announced! Wiping previous jobs...")
+                    logger.info("New block announced! Wiping previous jobs...")
                     self.net_state['transactions'].clear()
                     self.net_state['jobs'].clear()
                     self.net_state['latest_job'] = None
@@ -242,27 +242,6 @@ class MonitorNetwork(Greenlet):
                          "created job {}".format(dirty, job_id))
 
             return bt_obj
-
-    def new_block(self):
-        # dump the current transaction pool, refresh and push the
-        # event
-        logger.info("New block announced! Wiping previous jobs...")
-        self.net_state['transactions'].clear()
-        self.net_state['jobs'].clear()
-        self.net_state['latest_job'] = None
-        bt_obj = self.update_pool()
-        if bt_obj is None:
-            logger.error("None returned from push_new_block after "
-                         "clearning jobs...")
-        else:
-            self.push_new_block()
-            if self.config['send_new_block']:
-                hex_bits = hexlify(bt_obj.bits)
-                self.celery.send_task_pp('new_block',
-                                         bt_obj.block_height,
-                                         hex_bits,
-                                         bt_obj.total_value)
-            self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
 
 
 class MonitorAuxChain(Greenlet):
