@@ -2,12 +2,14 @@ import json
 import socket
 import logging
 import argparse
+import struct
 
 from time import time
 from binascii import hexlify, unhexlify
-from struct import pack, unpack
 from bitcoinrpc import CoinRPCException
 from cryptokit import target_from_diff
+from cryptokit.bitcoin import data as bitcoin_data
+from cryptokit.util import pack
 from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
 from gevent.event import Event
@@ -114,7 +116,7 @@ class StratumClient(GenericClient):
         self.address = None
         self.worker = ''
         # the worker id. this is also extranonce 1
-        self.id = hexlify(pack('Q', id))
+        self.id = hexlify(struct.pack('Q', id))
         self.stratum_clients[self.id] = self
         # subscription id for difficulty on stratum
         self.subscr_difficulty = None
@@ -294,7 +296,7 @@ class StratumClient(GenericClient):
             "ntime: {3}\n\tnonce: {4} ({int_nonce})"
             .format(
                 *params,
-                int_nonce=unpack(str("<L"), unhexlify(params[4]))))
+                int_nonce=struct.unpack(str("<L"), unhexlify(params[4]))))
 
         try:
             difficulty, jobid = self.job_mapper[data['params'][1]]
@@ -348,8 +350,61 @@ class StratumClient(GenericClient):
         job.acc_shares.add(share)
         self.server_state['shares'].incr(difficulty)
 
+        header_hash = sha256(sha256(header).digest()).digest()[::-1]
+        header_hash_int = bitcoin_data.hash256(header)
+
+        def check_merged_block():
+            aux_work, index, hashes = job.mm_later[0]
+            self.logger.debug("Checking for aux work diff {}".format(aux_work['target'] - hash_int))
+            if hash_int <= aux_work['target']:
+                self.logger.log(36, "New Aux Block identified!!!!")
+                aux_block = (
+                    pack.IntType(256, 'big').pack(aux_work['hash']).encode('hex'),
+                    bitcoin_data.aux_pow_type.pack(dict(
+                        merkle_tx=dict(
+                            tx=bitcoin_data.tx_type.unpack(job.coinbase.raw),
+                            block_hash=header_hash_int,
+                            merkle_link=job.merkle_link,
+                        ),
+                        merkle_link=bitcoin_data.calculate_merkle_link(hashes, index),
+                        parent_block_header=bitcoin_data.block_header_type.unpack(header),
+                    )).encode('hex'),
+                )
+                retries = 0
+                while retries < 5:
+                    retries += 1
+                    try:
+                        res = aux_work['merged_proxy'].getauxblock(*aux_block)
+                    except (CoinRPCException, socket.error, ValueError) as e:
+                        self.logger.error("Aux Block failed to submit to the server {}!",
+                                          exc_info=True)
+                        self.logger.error(getattr(e, 'error'))
+
+                    if res is True:
+                        hash_hex = hexlify(header_hash)
+                        self.celery.send_task_pp(
+                            'add_block',
+                            self.address,
+                            self.net_state['current_height'] + 1,
+                            job.total_value,
+                            job.fee_total,
+                            hexlify(job.bits),
+                            hash_hex,
+                            merged=True)
+                        self.logger.info("NEW Aux BLOCK ACCEPTED!!!")
+                        self.server_state['aux_block_solve'] = int(time())
+                        break  # break retry loop if success
+                    else:
+                        self.logger.error(
+                            "Aux Block failed to submit to the server, "
+                            "server returned {}!".format(res), exc_info=True)
+                sleep(1)
+
+        if job.mm_later:
+            spawn(check_merged_block)
+
         # valid network hash?
-        if hash_int >= job.bits_target:
+        if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
         try:
@@ -368,6 +423,7 @@ class StratumClient(GenericClient):
         def submit_block(conn):
             retries = 0
             while retries < 5:
+                retries += 1
                 res = "failed"
                 try:
                     res = conn.getblocktemplate({'mode': 'submit',
@@ -382,11 +438,9 @@ class StratumClient(GenericClient):
                         self.logger.error("Block failed to submit to the server {}!"
                                           .format(conn.name), exc_info=True)
                         self.logger.error(getattr(e, 'error'))
-                        continue
 
                 if res is None:
-                    hash_hex = hexlify(
-                        sha256(sha256(header).digest()).digest()[::-1])
+                    hash_hex = hexlify(header_hash)
                     self.celery.send_task_pp(
                         'add_block',
                         self.address,
@@ -404,7 +458,6 @@ class StratumClient(GenericClient):
                         "Block failed to submit to the server {}, "
                         "server returned {}!".format(conn.name, res),
                         exc_info=True)
-                retries += 1
                 sleep(1)
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
         for conn in self.net_state['live_connections']:

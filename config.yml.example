@@ -22,6 +22,17 @@ celery_task_prefix: simplecoin.tasks
 #    port: 3333
 #    address: 0.0.0.0
 
+# Merged mining configuration
+#merged:
+#   enabled: False
+#   # the amount of time between pining the auxilury coinserv for new aux work
+#   work_interval: 1
+#   coinserv:
+#       - port: 1234
+#         address: 127.0.0.1
+#         username: ''
+#         password: ''
+
 #vardiff:
 #    # should we use variable difficulty?
 #    enabled: False

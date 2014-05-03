@@ -16,7 +16,7 @@ import logging
 from celery import Celery
 from pprint import pformat
 
-from .netmon import monitor_network, monitor_nodes
+from .netmon import MonitorNetwork, monitor_nodes, MonitorAuxChain
 from .stratum_server import StratumServer
 from .agent_server import AgentServer
 from .stats import stat_rotater, StatManager
@@ -62,8 +62,13 @@ def net_runner(net_state, config, stratum_clients, server_state, celery,
                exit_event):
     logger.info("Network monitor starting up; Thread ID {}"
                 .format(threading.current_thread()))
-    network = Greenlet(monitor_network, stratum_clients, net_state, config,
-                       server_state, celery)
+    network = MonitorNetwork(stratum_clients, net_state, config,
+                             server_state, celery)
+    if config['merged']['enabled']:
+        logger.info("Aux network monitor starting up; Thread ID {}"
+                    .format(threading.current_thread()))
+        aux_network = MonitorAuxChain(net_state, config, network)
+        aux_network.start()
     nodes = Greenlet(monitor_nodes, config, net_state)
     nodes.start()
     network.start()
@@ -131,6 +136,9 @@ def main():
                             'level': 'DEBUG'}],
                   start_difficulty=128,
                   term_timeout=3,
+                  merged={'enabled': False,
+                          'work_interval': 1,
+                          'enabled': True},
                   monitor={'DEBUG': False,
                            'address': '127.0.0.1',
                            'port': 3855,
@@ -202,12 +210,15 @@ def main():
         'latest_job': None,
         'job_counter': 0,
         'difficulty': -1,
+        'aux_difficulty': -1,
+        'merged_work': None
     }
 
     # holds counters, timers, etc that have to do with overall server state
     server_state = {
         'server_start': datetime.datetime.utcnow(),
         'block_solve': None,
+        'aux_block_solve': None,
         'shares': StatManager(),
         'reject_low': StatManager(),
         'reject_dup': StatManager(),
