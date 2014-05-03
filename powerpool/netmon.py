@@ -190,6 +190,7 @@ class MonitorNetwork(Greenlet):
         if dirty or len(self.net_state['jobs']) == 0 or aux_work:
 
             merged_work = self.net_state['merged_work']
+            mm_data = None
             if self.net_state['merged_work']:
                 tree, size = bitcoin_data.make_auxpow_tree(merged_work)
                 mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
@@ -284,7 +285,12 @@ class MonitorAuxChain(Greenlet):
                 logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
                 sleep(1)
                 continue
-            auxblock = self.coinserv.getauxblock()
+            try:
+                auxblock = self.coinserv.getauxblock()
+            except Exception:
+                logger.warn("Unable to communicate with aux chain server", exc_info=True)
+                sleep(2)
+                continue
             logger.debug("Aux RPC returned: {}".format(auxblock))
             new_merged_work = {auxblock['chainid']: dict(
                 hash=int(auxblock['hash'], 16),
