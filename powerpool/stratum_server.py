@@ -644,7 +644,7 @@ class StratumClient(GenericClient):
             line = line.strip()
 
             # if there's data to read, parse it as json
-            if not len(line):
+            if len(line):
                 try:
                     data = json.loads(line)
                 except ValueError:
