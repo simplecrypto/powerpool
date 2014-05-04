@@ -52,6 +52,7 @@ class GenericClient(object):
                 self.fp.flush()
         except socket.error:
             self._disconnected = True
+            self.logger.debug("Write loop terminated, setting flag for read")
         except Exception:
             self.logger.warn("Unhandled exception in write loop!", exc_info=True)
             self._disconnected = True

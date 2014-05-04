@@ -155,7 +155,7 @@ class StratumClient(GenericClient):
         try:
             self.read_loop()
         except socket.error:
-            pass
+            self.logger.debug("Socket error closing connection", exc_info=True)
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
@@ -624,6 +624,7 @@ class StratumClient(GenericClient):
     def read_loop(self):
         while True:
             if self._disconnected:
+                self.logger.debug("Read loop encountered flag from write, exiting")
                 break
 
             line = with_timeout(self.config['push_job_interval'],
@@ -643,7 +644,7 @@ class StratumClient(GenericClient):
             line = line.strip()
 
             # if there's data to read, parse it as json
-            if line:
+            if not len(line):
                 try:
                     data = json.loads(line)
                 except ValueError:
@@ -651,9 +652,7 @@ class StratumClient(GenericClient):
                     self.send_error()
                     continue
             else:
-                #self.send_error()
-                sleep(1)
-                continue
+                break
 
             # set the msgid
             self.msg_id = data.get('id', 1)
