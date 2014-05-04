@@ -401,7 +401,7 @@ class StratumClient(GenericClient):
                             'add_block',
                             self.address,
                             new_height,
-                            amount,
+                            int(amount * 100000000),
                             -1,
                             "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_work['target']).bits,
                             hsh,
