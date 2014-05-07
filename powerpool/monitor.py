@@ -27,6 +27,7 @@ def general():
                    server_start=str(server_state['server_start']),
                    uptime=str(datetime.datetime.utcnow() - server_state['server_start']),
                    agent_clients=len(agent_clients),
+                   aux_state=server_state['aux_state'],
                    current_height=net_state['current_height'],
                    difficulty=net_state['difficulty'],
                    jobs=len(net_state['jobs']),

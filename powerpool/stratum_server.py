@@ -147,6 +147,9 @@ class StratumClient(GenericClient):
         self.new_block_event = None
         self.new_block_event = Event()
         self.new_block_event.rawlink(self.new_block_call)
+        self.new_work_event = None
+        self.new_work_event = Event()
+        self.new_work_event.rawlink(self.new_work_call)
 
         # where we put all the messages that need to go out
         self.write_queue = Queue()
@@ -208,11 +211,23 @@ class StratumClient(GenericClient):
                     peer_name=self.peer_name[0],
                     connection_time=self.connection_time_dt)
 
+    # watch for new work announcements and push accordingly
+    def new_work_call(self, event):
+        """ An event triggered by the network monitor when it learns of a
+        new work on an aux chain. """
+        self.logger.info("Signaling new work for client {}.{}"
+                         .format(self.address, self.worker))
+        # only push jobs to authed workers...
+        if self.authenticated is True:
+            self.push_job()
+
     # watch for new block announcements and push accordingly
     def new_block_call(self, event):
         """ An event triggered by the network monitor when it learns of a
         new block on the network. All old work is now useless so must be
         flushed. """
+        self.logger.info("Signaling new block for client {}.{}"
+                         .format(self.address, self.worker))
         # only push jobs to authed workers...
         if self.authenticated is True:
             self.push_job(flush=True)
@@ -353,11 +368,11 @@ class StratumClient(GenericClient):
         header_hash = sha256(sha256(header).digest()).digest()[::-1]
         header_hash_int = bitcoin_data.hash256(header)
 
-        def check_merged_block():
-            aux_work, index, hashes = job.mm_later[0]
-            self.logger.debug("Checking for aux work diff {}".format(aux_work['target'] - hash_int))
+        def check_merged_block(mm_later):
+            aux_work, index, hashes = mm_later
+            monitor = aux_work['monitor']
             if hash_int <= aux_work['target']:
-                self.logger.log(36, "New Aux Block identified!!!!")
+                self.logger.log(36, "New {} Aux Block identified!".format(monitor.name))
                 aux_block = (
                     pack.IntType(256, 'big').pack(aux_work['hash']).encode('hex'),
                     bitcoin_data.aux_pow_type.pack(dict(
@@ -373,50 +388,53 @@ class StratumClient(GenericClient):
                 retries = 0
                 while retries < 5:
                     retries += 1
-                    new_height = self.net_state['aux_height'] + 1
+                    new_height = self.server_state['aux_state'][monitor.name]['height'] + 1
                     try:
                         res = aux_work['merged_proxy'].getauxblock(*aux_block)
                     except (CoinRPCException, socket.error, ValueError) as e:
-                        self.logger.error("Aux Block failed to submit to the server {}!",
-                                          exc_info=True)
+                        self.logger.error("{} Aux block failed to submit to the server {}!"
+                                          .format(monitor.name), exc_info=True)
                         self.logger.error(getattr(e, 'error'))
 
                     if res is True:
-                        try:
-                            hsh = aux_work['merged_proxy'].getblockhash(new_height)
-                        except Exception:
-                            logger.info("", exc_info=True)
-                            hsh = ''
-                        try:
-                            block = aux_work['merged_proxy'].getblock(hsh)
-                        except Exception:
-                            logger.info("", exc_info=True)
-                        try:
-                            trans = aux_work['merged_proxy'].gettransaction(block['tx'][0])
-                            amount = trans['details'][0]['amount']
-                        except Exception:
-                            logger.info("", exc_info=True)
-                            amount = -1
-                        self.celery.send_task_pp(
-                            'add_block',
-                            self.address,
-                            new_height,
-                            int(amount * 100000000),
-                            -1,
-                            "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_work['target']).bits,
-                            hsh,
-                            merged=True)
-                        self.logger.info("NEW Aux BLOCK ACCEPTED!!!")
-                        self.server_state['aux_block_solve'] = int(time())
+                        self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(monitor.name))
+                        self.server_state['aux_state'][monitor.name]['block_solve'] = int(time())
+                        if monitor.send:
+                            self.logger.info("Submitting {} new block to celery".format(monitor.name))
+                            try:
+                                hsh = aux_work['merged_proxy'].getblockhash(new_height)
+                            except Exception:
+                                self.logger.info("", exc_info=True)
+                                hsh = ''
+                            try:
+                                block = aux_work['merged_proxy'].getblock(hsh)
+                            except Exception:
+                                self.logger.info("", exc_info=True)
+                            try:
+                                trans = aux_work['merged_proxy'].gettransaction(block['tx'][0])
+                                amount = trans['details'][0]['amount']
+                            except Exception:
+                                self.logger.info("", exc_info=True)
+                                amount = -1
+                            self.celery.send_task_pp(
+                                'add_block',
+                                self.address,
+                                new_height,
+                                int(amount * 100000000),
+                                -1,
+                                "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_work['target']).bits,
+                                hsh,
+                                merged=monitor.celery_id)
                         break  # break retry loop if success
                     else:
                         self.logger.error(
-                            "Aux Block failed to submit to the server, "
-                            "server returned {}!".format(res), exc_info=True)
+                            "{} Aux Block failed to submit to the server, "
+                            "server returned {}!".format(monitor.name, res),
+                            exc_info=True)
                 sleep(1)
 
-        if job.mm_later:
-            spawn(check_merged_block)
+        for mm in job.mm_later:
+            spawn(check_merged_block, mm)
 
         # valid network hash?
         if hash_int > job.bits_target:

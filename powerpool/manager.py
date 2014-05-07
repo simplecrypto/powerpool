@@ -64,10 +64,12 @@ def net_runner(net_state, config, stratum_clients, server_state, celery,
                 .format(threading.current_thread()))
     network = MonitorNetwork(stratum_clients, net_state, config,
                              server_state, celery)
-    if config['merged']['enabled']:
-        logger.info("Aux network monitor starting up; Thread ID {}"
-                    .format(threading.current_thread()))
-        aux_network = MonitorAuxChain(net_state, config, network)
+    for coin in config['merged']:
+        if not coin['enabled']:
+            continue
+        logger.info("Aux network monitor for {} starting up; Thread ID {}"
+                    .format(coin['name'], threading.current_thread()))
+        aux_network = MonitorAuxChain(server_state, net_state, config, network, **coin)
         aux_network.start()
     nodes = Greenlet(monitor_nodes, config, net_state)
     nodes.start()
@@ -200,7 +202,6 @@ def main():
         # current known height of blockchain. used to track if we
         # need to reset our mining clients
         'current_height': 0,
-        'aux_height': -1,
         # a collection of known transaction objects
         'transactions': {},
         # index of all jobs currently accepting work. Contains complete
@@ -210,15 +211,14 @@ def main():
         'latest_job': None,
         'job_counter': 0,
         'difficulty': -1,
-        'aux_difficulty': -1,
-        'merged_work': None
+        'merged_work': {}
     }
 
     # holds counters, timers, etc that have to do with overall server state
     server_state = {
         'server_start': datetime.datetime.utcnow(),
         'block_solve': None,
-        'aux_block_solve': None,
+        'aux_state': {},
         'shares': StatManager(),
         'reject_low': StatManager(),
         'reject_dup': StatManager(),

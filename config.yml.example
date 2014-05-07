@@ -24,14 +24,23 @@ celery_task_prefix: simplecoin.tasks
 
 # Merged mining configuration
 #merged:
-#   enabled: False
-#   # the amount of time between pining the auxilury coinserv for new aux work
-#   work_interval: 1
-#   coinserv:
-#       - port: 1234
-#         address: 127.0.0.1
-#         username: ''
-#         password: ''
+#   - enabled: False
+#     # the amount of time between pining the auxilury coinserv for new aux work
+#     work_interval: 1
+#     # the unique name of the merged coin. used for indexing various
+#     # information and convenience
+#     name: mergie coin
+#     # whether we clear all previous jobs to push new aux work
+#     push: false
+#     # should we send a celery task to record the block?
+#     send: true
+#     # how we id the block type to celery
+#     celery_id: true
+#     coinserv:
+#         - port: 1234
+#           address: 127.0.0.1
+#           username: ''
+#           password: ''
 
 #vardiff:
 #    # should we use variable difficulty?

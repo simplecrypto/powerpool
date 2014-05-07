@@ -91,6 +91,7 @@ class MonitorNetwork(Greenlet):
         self.config = config
         self.server_state = server_state
         self.celery = celery
+        self.last_gbt = None
 
     def _run(self):
         i = 0
@@ -105,30 +106,12 @@ class MonitorNetwork(Greenlet):
                 if self.check_height():
                     # dump the current transaction pool, refresh and push the
                     # event
-                    logger.info("New block announced! Wiping previous jobs...")
-                    self.net_state['transactions'].clear()
-                    self.net_state['jobs'].clear()
-                    self.net_state['latest_job'] = None
-                    bt_obj = self.update_pool()
-                    if not bt_obj:
-                        continue
-                    self.push_new_block()
-                    if bt_obj is None:
-                        logger.error("None returned from push_new_block after "
-                                    "clearning jobs...")
-                    else:
-                        if self.config['send_new_block']:
-                            hex_bits = hexlify(bt_obj.bits)
-                            self.celery.send_task_pp('new_block',
-                                                     bt_obj.block_height,
-                                                     hex_bits,
-                                                     bt_obj.total_value)
-                        self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
+                    self.getblocktemplate(new_block=True)
                 else:
                     # check for new transactions when count interval has passed
                     if i >= self.config['job_generate_int']:
                         i = 0
-                        self.update_pool()
+                        self.getblocktemplate()
                     i += 1
             except Exception:
                 logger.error("Unhandled exception!", exc_info=True)
@@ -150,35 +133,25 @@ class MonitorNetwork(Greenlet):
             return True
         return False
 
-    def push_new_block(self):
-        """ Called when a new block was discovered in the longest blockchain.
-        This will dump current jobs, create a new job, and then push the
-        new job to all mining clients """
-        for idx, client in viewitems(self.stratum_clients):
-            try:
-                logger.debug("Signaling new block for client {}".format(idx))
-                client.new_block_event.set()
-            except AttributeError:
-                pass
-
-    def update_pool(self, aux_work=False):
+    def getblocktemplate(self, new_block=False):
+        dirty = 0   # track a change in the transaction pool
         try:
             # request local memory pool and load it in
-            bt = self.net_state['poll_connection'].getblocktemplate({'capabilities': [
-                'coinbasevalue',
-                'coinbase/append',
-                'coinbase',
-                'generation',
-                'time',
-                'transactions/remove',
-                'prevblock',
-            ]})
+            bt = self.net_state['poll_connection'].getblocktemplate(
+                {'capabilities': [
+                    'coinbasevalue',
+                    'coinbase/append',
+                    'coinbase',
+                    'generation',
+                    'time',
+                    'transactions/remove',
+                    'prevblock',
+                ]})
         except Exception as e:
             logger.warn("Failed to fetch new job. Reason: {}".format(e))
             down_connection(self.net_state['poll_connection'], self.net_state)
             return False
 
-        dirty = 0   # track a change in the transaction pool
         for trans in bt['transactions']:
             if trans['hash'] not in self.net_state['transactions']:
                 dirty += 1
@@ -187,76 +160,121 @@ class MonitorNetwork(Greenlet):
                 assert trans['hash'] == new_trans.lehexhash
                 self.net_state['transactions'][trans['hash']] = new_trans
 
-        if dirty or len(self.net_state['jobs']) == 0 or aux_work:
+        if new_block or dirty:
+            # generate a new job and push it if there's a new block on the
+            # network
+            self.last_gbt = bt
+            self.generate_job(push=new_block, flush=new_block, new_block=new_block)
 
-            merged_work = self.net_state['merged_work']
+    def generate_job(self, push=False, flush=False, new_block=False):
+        """ Creates a new job for miners to work on. Push will trigger an
+        event that sends new work but doesn't force a restart. If flush is
+        true a job restart will be triggered. """
+
+        # aux monitors will often call this early when not needed at startup
+        if self.last_gbt is None:
+            return
+
+        merged_work = self.net_state['merged_work']
+        if self.net_state['merged_work']:
+            tree, size = bitcoin_data.make_auxpow_tree(merged_work)
+            mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
+                         for i in xrange(size)]
+            mm_data = '\xfa\xbemm'
+            mm_data += bitcoin_data.aux_pow_coinbase_type.pack(dict(
+                merkle_root=bitcoin_data.merkle_hash(mm_hashes),
+                size=size,
+                nonce=0,
+            ))
+            mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes)
+                        for chain_id, aux_work in merged_work.iteritems()]
+        else:
+            mm_later = None
             mm_data = None
-            if self.net_state['merged_work']:
-                tree, size = bitcoin_data.make_auxpow_tree(merged_work)
-                mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
-                             for i in xrange(size)]
-                mm_data = '\xfa\xbemm'
-                mm_data += bitcoin_data.aux_pow_coinbase_type.pack(dict(
-                    merkle_root=bitcoin_data.merkle_hash(mm_hashes),
-                    size=size,
-                    nonce=0,
-                ))
-                mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes)
-                            for chain_id, aux_work in merged_work.iteritems()]
+
+        # here we recalculate the current merkle branch and partial
+        # coinbases for passing to the mining clients
+        coinbase = Transaction()
+        coinbase.version = 2
+        # create a coinbase input with encoded height and padding for the
+        # extranonces so script length is accurate
+        extranonce_length = (self.config['extranonce_size'] +
+                             self.config['extranonce_serv_size'])
+        coinbase.inputs.append(
+            Input.coinbase(self.last_gbt['height'],
+                           addtl_push=[mm_data] if mm_data else [],
+                           extra_script_sig=b'\0' * extranonce_length))
+        # simple output to the proper address and value
+        fees = 0
+        for t in self.net_state['transactions'].itervalues():
+            fees += t.fees
+        coinbase.outputs.append(
+            Output.to_address(self.last_gbt['coinbasevalue'] - fees, self.config['pool_address']))
+        job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
+        logger.info("Generating new block template with {} trans. Diff {}"
+                    .format(len(self.net_state['transactions']),
+                            bits_to_difficulty(self.last_gbt['bits'])))
+        bt_obj = BlockTemplate.from_gbt(self.last_gbt, coinbase, extranonce_length, [])
+        bt_obj.mm_later = copy(mm_later)
+        # hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
+        bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None], 0)
+        bt_obj.job_id = job_id
+        bt_obj.block_height = self.last_gbt['height']
+        bt_obj.acc_shares = set()
+        if push:
+            if flush:
+                logger.info("New work announced! Wiping previous jobs...")
+                self.net_state['transactions'].clear()
+                self.net_state['jobs'].clear()
+                self.net_state['latest_job'] = None
             else:
-                mm_later = None
+                logger.info("New work announced!")
 
-            # here we recalculate the current merkle branch and partial
-            # coinbases for passing to the mining clients
-            coinbase = Transaction()
-            coinbase.version = 2
-            # create a coinbase input with encoded height and padding for the
-            # extranonces so script length is accurate
-            extranonce_length = (self.config['extranonce_size'] +
-                                 self.config['extranonce_serv_size'])
-            coinbase.inputs.append(
-                Input.coinbase(bt['height'],
-                               addtl_push=[mm_data] if mm_data else [],
-                               extra_script_sig=b'\0' * extranonce_length))
-            # simple output to the proper address and value
-            fees = 0
-            for t in self.net_state['transactions'].itervalues():
-                fees += t.fees
-            coinbase.outputs.append(
-                Output.to_address(bt['coinbasevalue'] - fees, self.config['pool_address']))
-            job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
-            logger.info("Generating new block template with {} trans. Diff {}"
-                        .format(len(self.net_state['transactions']),
-                                bits_to_difficulty(bt['bits'])))
-            bt_obj = BlockTemplate.from_gbt(bt, coinbase, extranonce_length, [])
-            bt_obj.mm_later = copy(mm_later)
-            #hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
-            bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None], 0)
-            bt_obj.job_id = job_id
-            bt_obj.block_height = bt['height']
-            bt_obj.acc_shares = set()
-            self.net_state['job_counter'] += 1
-            self.net_state['jobs'][job_id] = bt_obj
-            self.net_state['latest_job'] = job_id
-            logger.debug("Adding {} new transactions to transaction pool, "
-                         "created job {}".format(dirty, job_id))
+        self.net_state['job_counter'] += 1
+        self.net_state['jobs'][job_id] = bt_obj
+        self.net_state['latest_job'] = job_id
+        if push:
+            for idx, client in viewitems(self.stratum_clients):
+                try:
+                    if flush:
+                        client.new_block_event.set()
+                    else:
+                        client.new_work_event.set()
+                except AttributeError:
+                    pass
 
-            return bt_obj
+        if new_block:
+            if self.config['send_new_block']:
+                hex_bits = hexlify(bt_obj.bits)
+                self.celery.send_task_pp('new_block',
+                                         bt_obj.block_height,
+                                         hex_bits,
+                                         bt_obj.total_value)
+            self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
 
 
 class MonitorAuxChain(Greenlet):
-    def __init__(self, net_state, config, monitor_network):
+    def __init__(self, server_state, net_state, config, monitor_network, **kwargs):
         Greenlet.__init__(self)
         self.net_state = net_state
+        self.server_state = server_state
         self.config = config
         self.monitor_network = monitor_network
+        self.__dict__.update(kwargs)
+        self.server_state['aux_state'][self.name] = {'difficulty': None,
+                                                     'height': None,
+                                                     'chain_id': None}
+        # convenience
+        self.aux_state = self.server_state['aux_state'][self.name]
+        self.coinservs = self.coinserv
         self.coinserv = bitcoinrpc.AuthServiceProxy(
             "http://{0}:{1}@{2}:{3}/"
-            .format(config['merged']['coinserv'][0]['username'],
-                    config['merged']['coinserv'][0]['password'],
-                    config['merged']['coinserv'][0]['address'],
-                    config['merged']['coinserv'][0]['port']),
-            pool_kwargs=dict(maxsize=config['merged']['coinserv'][0].get('maxsize', 10)))
+            .format(self.coinserv[0]['username'],
+                    self.coinserv[0]['password'],
+                    self.coinserv[0]['address'],
+                    self.coinserv[0]['port']),
+            pool_kwargs=dict(maxsize=self.coinserv[0].get('maxsize', 10)))
+        self.coinserv.config = self.coinservs[0]
 
     def _run(self):
         while True:
@@ -266,37 +284,32 @@ class MonitorAuxChain(Greenlet):
                 continue
             try:
                 auxblock = self.coinserv.getauxblock()
-            except Exception:
-                logger.warn("Unable to communicate with aux chain server", exc_info=True)
+            except Exception as e:
+                logger.warn("Unable to communicate with aux chain server. {}"
+                            .format(e))
                 sleep(2)
                 continue
             logger.debug("Aux RPC returned: {}".format(auxblock))
-            new_merged_work = {auxblock['chainid']: dict(
+            new_merged_work = dict(
                 hash=int(auxblock['hash'], 16),
                 target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
-                merged_proxy=self.coinserv
-            )}
-            if new_merged_work != self.net_state['merged_work']:
+                merged_proxy=self.coinserv,
+                monitor=self
+            )
+            self.aux_state['chain_id'] = auxblock['chainid']
+            if new_merged_work != self.net_state['merged_work'].get(auxblock['chainid']):
                 try:
                     height = self.coinserv.getblockcount()
-                except Exception:
-                    logger.warn("Unable to communicate with aux chain server", exc_info=True)
+                except Exception as e:
+                    logger.warn("Unable to communicate with aux chain server. {}"
+                                .format(e))
                     sleep(2)
                     continue
-                logger.info("New aux work annocuned! Diff {}. RPC returned: {}"
-                            .format(bitcoin_data.target_to_difficulty(new_merged_work.values()[0]['target']),
+                logger.info("New aux work announced! Diff {}. RPC returned: {}"
+                            .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
                                     new_merged_work))
-                self.net_state['merged_work'] = new_merged_work
-                self.net_state['aux_height'] = height
-                logger.info("New aux work announced! Wiping previous jobs...")
-                self.net_state['transactions'].clear()
-                self.net_state['jobs'].clear()
-                self.net_state['latest_job'] = None
-                bt_obj = self.monitor_network.update_pool(aux_work=True)
-                if bt_obj is None:
-                    logger.error("None returned from push_new_block after "
-                                 "clearning jobs...")
-                else:
-                    self.monitor_network.push_new_block()
-                    self.net_state['aux_difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
-            sleep(self.config['merged']['work_interval'])
+                self.net_state['merged_work'][auxblock['chainid']] = new_merged_work
+                self.aux_state['height'] = height
+                self.monitor_network.generate_job(push=True, flush=self.push)
+                self.aux_state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
+            sleep(self.work_interval)
