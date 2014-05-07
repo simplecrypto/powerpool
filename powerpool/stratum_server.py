@@ -359,8 +359,8 @@ class StratumClient(GenericClient):
 
         # we want to send an ack ASAP, so do it here
         self.send_success(self.msg_id)
-        self.logger.info("Valid share accepted from worker {}.{}!"
-                         .format(self.address, self.worker))
+        self.logger.debug("Valid share accepted from worker {}.{}!"
+                          .format(self.address, self.worker))
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.server_state['shares'].incr(difficulty)
