@@ -31,7 +31,7 @@ celery_task_prefix: simplecoin.tasks
 #     # information and convenience
 #     name: mergie coin
 #     # whether we clear all previous jobs to push new aux work
-#     push: false
+#     flush: false
 #     # should we send a celery task to record the block?
 #     send: true
 #     # how we id the block type to celery

@@ -10,6 +10,7 @@ from cryptokit import bits_to_difficulty
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep, Greenlet
+from gevent.coros import BoundedSemaphore
 from copy import copy
 
 logger = logging.getLogger('netmon')
@@ -92,6 +93,7 @@ class MonitorNetwork(Greenlet):
         self.server_state = server_state
         self.celery = celery
         self.last_gbt = None
+        self.job_lock = BoundedSemaphore()
 
     def _run(self):
         i = 0
@@ -152,18 +154,26 @@ class MonitorNetwork(Greenlet):
             down_connection(self.net_state['poll_connection'], self.net_state)
             return False
 
-        for trans in bt['transactions']:
-            if trans['hash'] not in self.net_state['transactions']:
-                dirty += 1
-                new_trans = Transaction(unhexlify(trans['data']),
-                                        fees=trans['fee'])
-                assert trans['hash'] == new_trans.lehexhash
-                self.net_state['transactions'][trans['hash']] = new_trans
+        with self.job_lock:
+            if new_block:
+                self.net_state['transactions'].clear()
+            for trans in bt['transactions']:
+                if trans['hash'] not in self.net_state['transactions']:
+                    dirty += 1
+                    new_trans = Transaction(unhexlify(trans['data']),
+                                            fees=trans['fee'])
+                    assert trans['hash'] == new_trans.lehexhash
+                    self.net_state['transactions'][trans['hash']] = new_trans
+
+            bt['fees'] = 0
+            for t in self.net_state['transactions'].itervalues():
+                bt['fees'] += t.fees
+
+            self.last_gbt = bt
 
         if new_block or dirty:
             # generate a new job and push it if there's a new block on the
             # network
-            self.last_gbt = bt
             self.generate_job(push=new_block, flush=new_block, new_block=new_block)
 
     def generate_job(self, push=False, flush=False, new_block=False):
@@ -189,42 +199,42 @@ class MonitorNetwork(Greenlet):
             mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes)
                         for chain_id, aux_work in merged_work.iteritems()]
         else:
-            mm_later = None
+            mm_later = []
             mm_data = None
 
-        # here we recalculate the current merkle branch and partial
-        # coinbases for passing to the mining clients
-        coinbase = Transaction()
-        coinbase.version = 2
-        # create a coinbase input with encoded height and padding for the
-        # extranonces so script length is accurate
-        extranonce_length = (self.config['extranonce_size'] +
-                             self.config['extranonce_serv_size'])
-        coinbase.inputs.append(
-            Input.coinbase(self.last_gbt['height'],
-                           addtl_push=[mm_data] if mm_data else [],
-                           extra_script_sig=b'\0' * extranonce_length))
-        # simple output to the proper address and value
-        fees = 0
-        for t in self.net_state['transactions'].itervalues():
-            fees += t.fees
-        coinbase.outputs.append(
-            Output.to_address(self.last_gbt['coinbasevalue'] - fees, self.config['pool_address']))
-        job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
-        logger.info("Generating new block template with {} trans. Diff {}"
-                    .format(len(self.net_state['transactions']),
-                            bits_to_difficulty(self.last_gbt['bits'])))
-        bt_obj = BlockTemplate.from_gbt(self.last_gbt, coinbase, extranonce_length, [])
-        bt_obj.mm_later = copy(mm_later)
-        # hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
-        bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None], 0)
-        bt_obj.job_id = job_id
-        bt_obj.block_height = self.last_gbt['height']
-        bt_obj.acc_shares = set()
+        with self.job_lock:
+            # here we recalculate the current merkle branch and partial
+            # coinbases for passing to the mining clients
+            coinbase = Transaction()
+            coinbase.version = 2
+            # create a coinbase input with encoded height and padding for the
+            # extranonces so script length is accurate
+            extranonce_length = (self.config['extranonce_size'] +
+                                 self.config['extranonce_serv_size'])
+            coinbase.inputs.append(
+                Input.coinbase(self.last_gbt['height'],
+                               addtl_push=[mm_data] if mm_data else [],
+                               extra_script_sig=b'\0' * extranonce_length))
+            # simple output to the proper address and value
+            coinbase.outputs.append(
+                Output.to_address(self.last_gbt['coinbasevalue'] - self.last_gbt['fees'], self.config['pool_address']))
+            job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
+            logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}. Fees {}."
+                        .format(len(self.net_state['transactions']),
+                                bits_to_difficulty(self.last_gbt['bits']),
+                                self.last_gbt['coinbasevalue'],
+                                self.last_gbt['fees']))
+            bt_obj = BlockTemplate.from_gbt(self.last_gbt, coinbase, extranonce_length, [])
+            bt_obj.mm_later = copy(mm_later)
+            # hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
+            bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None], 0)
+            bt_obj.job_id = job_id
+            bt_obj.block_height = self.last_gbt['height']
+            bt_obj.acc_shares = set()
+
         if push:
             if flush:
                 logger.info("New work announced! Wiping previous jobs...")
-                self.net_state['transactions'].clear()
                 self.net_state['jobs'].clear()
                 self.net_state['latest_job'] = None
             else:
@@ -263,7 +273,11 @@ class MonitorAuxChain(Greenlet):
         self.__dict__.update(kwargs)
         self.server_state['aux_state'][self.name] = {'difficulty': None,
                                                      'height': None,
-                                                     'chain_id': None}
+                                                     'chain_id': None,
+                                                     'block_solve': None,
+                                                     'work_restarts': 0,
+                                                     'new_jobs': 0,
+                                                     'solves': 0}
         # convenience
         self.aux_state = self.server_state['aux_state'][self.name]
         self.coinservs = self.coinserv
@@ -289,7 +303,7 @@ class MonitorAuxChain(Greenlet):
                             .format(e))
                 sleep(2)
                 continue
-            logger.debug("Aux RPC returned: {}".format(auxblock))
+            #logger.debug("Aux RPC returned: {}".format(auxblock))
             new_merged_work = dict(
                 hash=int(auxblock['hash'], 16),
                 target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
@@ -309,7 +323,13 @@ class MonitorAuxChain(Greenlet):
                             .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
                                     new_merged_work))
                 self.net_state['merged_work'][auxblock['chainid']] = new_merged_work
-                self.aux_state['height'] = height
-                self.monitor_network.generate_job(push=True, flush=self.push)
                 self.aux_state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
+                # only push the job if there's a new block height discovered.
+                if self.aux_state['height'] != height:
+                    self.aux_state['height'] = height
+                    self.monitor_network.generate_job(push=True, flush=self.flush)
+                    self.aux_state['work_restarts'] += 1
+                else:
+                    self.monitor_network.generate_job()
+                    self.aux_state['new_jobs'] += 1
             sleep(self.work_interval)

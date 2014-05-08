@@ -370,8 +370,9 @@ class StratumClient(GenericClient):
 
         def check_merged_block(mm_later):
             aux_work, index, hashes = mm_later
-            monitor = aux_work['monitor']
             if hash_int <= aux_work['target']:
+                monitor = aux_work['monitor']
+                self.server_state['aux_state'][monitor.name]['solves'] += 1
                 self.logger.log(36, "New {} Aux Block identified!".format(monitor.name))
                 aux_block = (
                     pack.IntType(256, 'big').pack(aux_work['hash']).encode('hex'),
