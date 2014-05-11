@@ -138,8 +138,8 @@ def main():
                             'level': 'DEBUG'}],
                   start_difficulty=128,
                   term_timeout=3,
-                  merged={'enabled': False,
-                          'work_interval': 1},
+                  merged=[{'enabled': False,
+                          'work_interval': 1}],
                   monitor={'DEBUG': False,
                            'address': '127.0.0.1',
                            'port': 3855,
@@ -201,7 +201,7 @@ def main():
         'down_connections': [],
         # current known height of blockchain. used to track if we
         # need to reset our mining clients
-        'current_height': 0,
+        'current_height': None,
         # a collection of known transaction objects
         'transactions': {},
         # index of all jobs currently accepting work. Contains complete

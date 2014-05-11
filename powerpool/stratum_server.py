@@ -162,15 +162,16 @@ class StratumClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            read_greenlet.kill()
             try:
-                self.sock.shutdown(socket.SHUT_WR)
+                self.sock.shutdown(socket.SHUT_RDWR)
             except socket.error:
                 pass
             try:
+                self.fp.close()
                 self.sock.close()
             except socket.error:
                 pass
-            read_greenlet.kill()
             self.report_shares(flush=True)
             self.server_state['stratum_disconnects'].incr()
             del self.stratum_clients[self.id]
@@ -340,7 +341,7 @@ class StratumClient(GenericClient):
 
         # Check a submitted share against previous shares to eliminate
         # duplicates
-        share = (self.id, params[2], params[4])
+        share = (self.id, params[2], params[4], params[3])
         if share in job.acc_shares:
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
@@ -464,8 +465,9 @@ class StratumClient(GenericClient):
                                                  'data': block})
                 except (CoinRPCException, socket.error, ValueError) as e:
                     self.logger.info("Block failed to submit to the server {} with submitblock!"
-                                     .format(conn.name), exc_info=True)
-                    self.logger.error(getattr(e, 'error'))
+                                     .format(conn.name))
+                    if getattr(e, 'error', {}).get('code', 0) != -8:
+                        self.logger.error(getattr(e, 'error'), exc_info=True)
                     try:
                         res = conn.submitblock(block)
                     except (CoinRPCException, socket.error, ValueError) as e:
@@ -702,8 +704,10 @@ class StratumClient(GenericClient):
                     outcome, diff = self.submit_job(data)
                     self.log_share(outcome, diff)
                 else:
-                    self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
+                    self.logger.warn("Unkown action for command {}"
+                                     .format(self.peer_name[0]))
                     self.send_error()
             else:
-                self.logger.warn("Unkown action for command {}".format(self.peer_name[0]))
+                self.logger.warn("Unkown action for command {}"
+                                 .format(self.peer_name[0]))
                 self.send_error()
