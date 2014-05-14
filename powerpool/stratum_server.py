@@ -110,7 +110,6 @@ class StratumClient(GenericClient):
 
         # flags for current connection state
         self._disconnected = False
-        self.peer_name = sock.getpeername()
         self.authenticated = False
         self.subscribed = False
         self.address = None
@@ -141,7 +140,6 @@ class StratumClient(GenericClient):
         self.next_diff = self.config['start_difficulty']
         self.connection_time = int(time())
         self.msg_id = None
-        self.fp = sock.makefile()
 
         # trigger to send a new block notice to a user
         self.new_block_event = None
@@ -154,15 +152,17 @@ class StratumClient(GenericClient):
         # where we put all the messages that need to go out
         self.write_queue = Queue()
 
-        read_greenlet = spawn(self.write_loop)
         try:
+            self.peer_name = sock.getpeername()
+            self.fp = sock.makefile()
+            write_greenlet = spawn(self.write_loop)
             self.read_loop()
         except socket.error:
             self.logger.debug("Socket error closing connection", exc_info=True)
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            read_greenlet.kill()
+            write_greenlet.kill()
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
             except socket.error:

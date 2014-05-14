@@ -79,23 +79,24 @@ class AgentClient(GenericClient):
         # where we put all the messages that need to go out
         self.write_queue = Queue()
 
-        read_greenlet = spawn(self.write_loop)
         try:
+            write_greenlet = spawn(self.write_loop)
             self.read_loop()
         except socket.error:
             pass
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            write_greenlet.kill()
             try:
-                self.sock.shutdown(socket.SHUT_WR)
+                self.sock.shutdown(socket.SHUT_RDWR)
             except socket.error:
                 pass
             try:
+                self.fp.close()
                 self.sock.close()
             except socket.error:
                 pass
-            read_greenlet.kill()
             self.server_state['agent_disconnects'].incr()
             if self.client_state:
                 try:
