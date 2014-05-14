@@ -254,13 +254,13 @@ class MonitorNetwork(Greenlet):
                     pass
 
         if new_block:
+            hex_bits = hexlify(bt_obj.bits)
+            self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
             if self.config['send_new_block']:
-                hex_bits = hexlify(bt_obj.bits)
                 self.celery.send_task_pp('new_block',
                                          bt_obj.block_height,
                                          hex_bits,
                                          bt_obj.total_value)
-            self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
 
 
 class MonitorAuxChain(Greenlet):
