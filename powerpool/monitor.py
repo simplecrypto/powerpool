@@ -49,13 +49,13 @@ def client(address=None):
     except KeyError:
         abort(404)
 
-    return jsonify(**{address: [client.summary for client in clients]})
+    return jsonify(**{address: [client.details for client in clients]})
 
 
 @monitor_app.route('/clients')
 def clients():
     lut = monitor_app.config['stratum_clients']['address_lut']
-    clients = {key: [item.details for item in value]
+    clients = {key: [item.summary for item in value]
                for key, value in lut.iteritems()}
 
     return jsonify(clients=clients)

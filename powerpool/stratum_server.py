@@ -153,6 +153,7 @@ class StratumClient(GenericClient):
 
         # where we put all the messages that need to go out
         self.write_queue = Queue()
+        write_greenlet = None
 
         try:
             self.peer_name = sock.getpeername()
@@ -164,7 +165,9 @@ class StratumClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
-            write_greenlet.kill()
+            if write_greenlet:
+                write_greenlet.kill()
+
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
             except socket.error:
@@ -204,10 +207,10 @@ class StratumClient(GenericClient):
 
     @property
     def details(self):
-        return dict(dup_shares=self.dup_shares,
-                    stale_shares=self.stale_shares,
-                    low_diff_shares=self.low_diff_shares,
-                    valid_shares=self.valid_shares,
+        return dict(dup_shares=sum(self.dup_shares),
+                    stale_shares=sum(self.stale_shares),
+                    low_diff_shares=sum(self.low_diff_shares),
+                    valid_shares=sum(self.valid_shares),
                     difficulty=self.difficulty,
                     worker=self.worker,
                     address=self.address,
