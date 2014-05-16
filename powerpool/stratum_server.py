@@ -175,7 +175,7 @@ class StratumClient(GenericClient):
             try:
                 self.fp.close()
                 self.sock.close()
-            except socket.error:
+            except (socket.error, AttributeError):
                 pass
             self.report_shares(flush=True)
             self.server_state['stratum_disconnects'].incr()
