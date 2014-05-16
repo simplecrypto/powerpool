@@ -3,6 +3,7 @@ import socket
 import logging
 import argparse
 import struct
+import random
 
 from time import time
 from binascii import hexlify, unhexlify
@@ -133,8 +134,9 @@ class StratumClient(GenericClient):
         # an index of jobs and their difficulty
         self.job_mapper = {}
         # last time we sent graphing data to the server
-        self.last_graph_transmit = time()
-        self.last_diff_adj = time()
+        self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
+        self.last_graph_transmit = time() - self.time_seed
+        self.last_diff_adj = time() - self.time_seed
         self.difficulty = self.config['start_difficulty']
         # the next diff to be used by push job
         self.next_diff = self.config['start_difficulty']
@@ -555,7 +557,7 @@ class StratumClient(GenericClient):
                 self.celery.send_task_pp('add_share', self.address, valid)
                 self.logger.info("Entering {} shares for {}.{}"
                                  .format(valid, self.address, self.worker))
-            self.last_graph_transmit = upper
+            self.last_graph_transmit = upper - self.time_seed
 
         # don't recalc their diff more often than interval
         if (self.config['vardiff']['enabled'] and
@@ -648,7 +650,7 @@ class StratumClient(GenericClient):
                 self.logger.debug("Read loop encountered flag from write, exiting")
                 break
 
-            line = with_timeout(self.config['push_job_interval'],
+            line = with_timeout(self.config['push_job_interval'] - self.time_seed,
                                 self.fp.readline,
                                 timeout_value='timeout')
 
