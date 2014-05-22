@@ -10,7 +10,6 @@ from cryptokit import bits_to_difficulty
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep, Greenlet
-from gevent.coros import BoundedSemaphore
 from copy import copy
 
 logger = logging.getLogger('netmon')
@@ -93,7 +92,6 @@ class MonitorNetwork(Greenlet):
         self.server_state = server_state
         self.celery = celery
         self.last_gbt = None
-        self.job_lock = BoundedSemaphore()
 
     def _run(self):
         i = 0
@@ -106,6 +104,7 @@ class MonitorNetwork(Greenlet):
 
                 # if there's a new block registered
                 if self.check_height():
+                    logger.info("New block on main network detected")
                     # dump the current transaction pool, refresh and push the
                     # event
                     self.getblocktemplate(new_block=True)
@@ -136,7 +135,7 @@ class MonitorNetwork(Greenlet):
         return False
 
     def getblocktemplate(self, new_block=False):
-        dirty = 0   # track a change in the transaction pool
+        dirty = False
         try:
             # request local memory pool and load it in
             bt = self.net_state['poll_connection'].getblocktemplate(
@@ -154,22 +153,10 @@ class MonitorNetwork(Greenlet):
             down_connection(self.net_state['poll_connection'], self.net_state)
             return False
 
-        with self.job_lock:
-            if new_block:
-                self.net_state['transactions'].clear()
-            for trans in bt['transactions']:
-                if trans['hash'] not in self.net_state['transactions']:
-                    dirty += 1
-                    new_trans = Transaction(unhexlify(trans['data']),
-                                            fees=trans['fee'])
-                    assert trans['hash'] == new_trans.lehexhash
-                    self.net_state['transactions'][trans['hash']] = new_trans
-
-            bt['fees'] = 0
-            for t in self.net_state['transactions'].itervalues():
-                bt['fees'] += t.fees
-
+        # generate a new job if we got some new work!
+        if bt != self.last_gbt:
             self.last_gbt = bt
+            dirty = True
 
         if new_block or dirty:
             # generate a new job and push it if there's a new block on the
@@ -202,35 +189,37 @@ class MonitorNetwork(Greenlet):
             mm_later = []
             mm_data = None
 
-        with self.job_lock:
-            # here we recalculate the current merkle branch and partial
-            # coinbases for passing to the mining clients
-            coinbase = Transaction()
-            coinbase.version = 2
-            # create a coinbase input with encoded height and padding for the
-            # extranonces so script length is accurate
-            extranonce_length = (self.config['extranonce_size'] +
-                                 self.config['extranonce_serv_size'])
-            coinbase.inputs.append(
-                Input.coinbase(self.last_gbt['height'],
-                               addtl_push=[mm_data] if mm_data else [],
-                               extra_script_sig=b'\0' * extranonce_length))
-            # simple output to the proper address and value
-            coinbase.outputs.append(
-                Output.to_address(self.last_gbt['coinbasevalue'] - self.last_gbt['fees'], self.config['pool_address']))
-            job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
-            logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}. Fees {}."
-                        .format(len(self.net_state['transactions']),
-                                bits_to_difficulty(self.last_gbt['bits']),
-                                self.last_gbt['coinbasevalue'],
-                                self.last_gbt['fees']))
-            bt_obj = BlockTemplate.from_gbt(self.last_gbt, coinbase, extranonce_length, [])
-            bt_obj.mm_later = copy(mm_later)
-            # hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
-            bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None], 0)
-            bt_obj.job_id = job_id
-            bt_obj.block_height = self.last_gbt['height']
-            bt_obj.acc_shares = set()
+        # here we recalculate the current merkle branch and partial
+        # coinbases for passing to the mining clients
+        coinbase = Transaction()
+        coinbase.version = 2
+        # create a coinbase input with encoded height and padding for the
+        # extranonces so script length is accurate
+        extranonce_length = (self.config['extranonce_size'] +
+                             self.config['extranonce_serv_size'])
+        coinbase.inputs.append(
+            Input.coinbase(self.last_gbt['height'],
+                           addtl_push=[mm_data] if mm_data else [],
+                           extra_script_sig=b'\0' * extranonce_length))
+        # simple output to the proper address and value
+        coinbase.outputs.append(
+            Output.to_address(self.last_gbt['coinbasevalue'], self.config['pool_address']))
+        job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
+        logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}."
+                    .format(len(self.last_gbt['transactions']),
+                            bits_to_difficulty(self.last_gbt['bits']),
+                            self.last_gbt['coinbasevalue']))
+        bt_obj = BlockTemplate.from_gbt(self.last_gbt,
+                                        coinbase,
+                                        extranonce_length,
+                                        [Transaction(unhexlify(t['data']), fees=t['fee'])
+                                         for t in self.last_gbt['transactions']])
+        bt_obj.mm_later = copy(mm_later)
+        hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
+        bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
+        bt_obj.job_id = job_id
+        bt_obj.block_height = self.last_gbt['height']
+        bt_obj.acc_shares = set()
 
         if push:
             if flush:
