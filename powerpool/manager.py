@@ -4,6 +4,7 @@ import collections
 import datetime
 
 from cryptokit.base58 import get_bcaddress_version
+from collections import deque
 from gevent import Greenlet
 from gevent.monkey import patch_all, patch_thread
 from gevent.wsgi import WSGIServer
@@ -199,18 +200,21 @@ def main():
         'poll_connection': None,
         'live_connections': [],
         'down_connections': [],
-        # current known height of blockchain. used to track if we
-        # need to reset our mining clients
-        'current_height': None,
-        # a collection of known transaction objects
-        'transactions': {},
         # index of all jobs currently accepting work. Contains complete
         # block templates
         'jobs': {},
         # the job that should be sent to clients needing work
         'latest_job': None,
         'job_counter': 0,
-        'difficulty': -1,
+        'work': {'difficulty': None,
+                 'height': None,
+                 'block_solve': None,
+                 'work_restarts': 0,
+                 'new_jobs': 0,
+                 'rejects': 0,
+                 'accepts': 0,
+                 'solves': 0,
+                 'recent_blocks': deque(maxlen=15)},
         'merged_work': {}
     }
 

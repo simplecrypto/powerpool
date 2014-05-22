@@ -392,6 +392,7 @@ class StratumClient(GenericClient):
                         parent_block_header=bitcoin_data.block_header_type.unpack(header),
                     )).encode('hex'),
                 )
+
                 retries = 0
                 while retries < 5:
                     retries += 1
@@ -406,6 +407,9 @@ class StratumClient(GenericClient):
                     if res is True:
                         self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(monitor.name))
                         self.server_state['aux_state'][monitor.name]['block_solve'] = int(time())
+                        self.server_state['aux_state'][monitor.name]['accepts'] += 1
+                        self.server_state['aux_state'][monitor.name]['recent_blocks'].append(
+                            dict(height=new_height, timestamp=int(time())))
                         if monitor.send:
                             self.logger.info("Submitting {} new block to celery".format(monitor.name))
                             try:
@@ -438,7 +442,9 @@ class StratumClient(GenericClient):
                             "{} Aux Block failed to submit to the server, "
                             "server returned {}!".format(monitor.name, res),
                             exc_info=True)
-                sleep(1)
+                    sleep(1)
+                else:
+                    self.server_state['aux_state'][monitor.name]['rejects'] += 1
 
         for mm in job.mm_later:
             spawn(check_merged_block, mm)
@@ -447,20 +453,10 @@ class StratumClient(GenericClient):
         if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
-        try:
-            self.logger.log(35, "Valid network block identified!")
-            self.logger.info("New block at height %i" % self.net_state['current_height'])
-            self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
-            block = hexlify(job.submit_serial(header))
-            self.logger.log(35, "New block hex dump:\n{}".format(block))
-            self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
-            for trans in job.transactions:
-                self.logger.log(35, str(trans.to_dict()))
-        except Exception:
-            # because I'm paranoid...
-            self.logger.error("Unexcpected exception in block logging!", exc_info=True)
+        block = hexlify(job.submit_serial(header))
 
         def submit_block(conn):
+
             retries = 0
             while retries < 5:
                 retries += 1
@@ -481,11 +477,14 @@ class StratumClient(GenericClient):
                         self.logger.error(getattr(e, 'error'))
 
                 if res is None:
+                    self.net_state['work']['accepts'] += 1
+                    self.net_state['work']['recent_blocks'].append(
+                        dict(height=job.block_height, timestamp=int(time())))
                     hash_hex = hexlify(header_hash)
                     self.celery.send_task_pp(
                         'add_block',
                         self.address,
-                        self.net_state['current_height'] + 1,
+                        job.block_height,
                         job.total_value,
                         job.fee_total,
                         hexlify(job.bits),
@@ -501,10 +500,24 @@ class StratumClient(GenericClient):
                         exc_info=True)
                 sleep(1)
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
+            else:
+                self.net_state['work']['rejects'] += 1
         for conn in self.net_state['live_connections']:
             # spawn a new greenlet for each submission to do them all async.
             # lower orphan chance
             spawn(submit_block, conn)
+
+        try:
+            self.logger.log(35, "Valid network block identified!")
+            self.logger.info("New block at height %i" % self.net_state['work']['height'])
+            self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
+            self.logger.log(35, "New block hex dump:\n{}".format(block))
+            self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
+            for trans in job.transactions:
+                self.logger.log(35, str(trans.to_dict()))
+        except Exception:
+            # because I'm paranoid...
+            self.logger.error("Unexcpected exception in block logging!", exc_info=True)
 
         return self.BLOCK_FOUND, difficulty
 

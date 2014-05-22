@@ -4,6 +4,7 @@ import struct
 
 from future.utils import viewitems
 from binascii import unhexlify, hexlify
+from collections import deque
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from cryptokit import bits_to_difficulty
@@ -129,8 +130,8 @@ class MonitorNetwork(Greenlet):
             down_connection(self.net_state['poll_connection'], self.net_state)
             return False
 
-        if self.net_state['current_height'] != height:
-            self.net_state['current_height'] = height
+        if self.net_state['work']['height'] != height:
+            self.net_state['work']['height'] = height
             return True
         return False
 
@@ -244,7 +245,7 @@ class MonitorNetwork(Greenlet):
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
-            self.net_state['difficulty'] = bits_to_difficulty(hex_bits)
+            self.net_state['work']['difficulty'] = bits_to_difficulty(hex_bits)
             if self.config['send_new_block']:
                 self.celery.send_task_pp('new_block',
                                          bt_obj.block_height,
@@ -266,7 +267,10 @@ class MonitorAuxChain(Greenlet):
                                                      'block_solve': None,
                                                      'work_restarts': 0,
                                                      'new_jobs': 0,
-                                                     'solves': 0}
+                                                     'solves': 0,
+                                                     'rejects': 0,
+                                                     'accepts': 0,
+                                                     'recent_blocks': deque(maxlen=15)}
         # convenience
         self.aux_state = self.server_state['aux_state'][self.name]
         self.coinservs = self.coinserv

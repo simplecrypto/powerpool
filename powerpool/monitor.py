@@ -14,6 +14,24 @@ monitor_app = Flask('monitor')
 cpu_times = (None, None)
 
 
+def jsonize(item):
+    if isinstance(item, dict):
+        new = {}
+        for k, v in item.iteritems():
+            if isinstance(v, deque):
+                new[k] = jsonize(list(v))
+            else:
+                new[k] = jsonize(v)
+        return new
+    elif isinstance(item, list):
+        new = []
+        for part in item:
+            new.append(jsonize(part))
+        return new
+    else:
+        return item
+
+
 @monitor_app.route('/')
 def general():
     net_state = monitor_app.config['net_state']
@@ -27,9 +45,8 @@ def general():
                    server_start=str(server_state['server_start']),
                    uptime=str(datetime.datetime.utcnow() - server_state['server_start']),
                    agent_clients=len(agent_clients),
-                   aux_state=server_state['aux_state'],
-                   current_height=net_state['current_height'],
-                   difficulty=net_state['difficulty'],
+                   aux_state=jsonize(server_state['aux_state']),
+                   main_state=jsonize(net_state['work']),
                    jobs=len(net_state['jobs']),
                    shares=share_summary,
                    reject_dup=server_state['reject_dup'].summary(),
@@ -38,8 +55,7 @@ def general():
                    agent_disconnects=server_state['agent_disconnects'].summary(),
                    agent_connects=server_state['agent_connects'].summary(),
                    stratum_disconnects=server_state['stratum_disconnects'].summary(),
-                   stratum_connects=server_state['stratum_connects'].summary(),
-                   block_solve=server_state['block_solve'])
+                   stratum_connects=server_state['stratum_connects'].summary())
 
 
 @monitor_app.route('/client/<address>')
