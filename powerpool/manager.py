@@ -2,6 +2,7 @@ import yaml
 import argparse
 import collections
 import datetime
+import setproctitle
 
 from cryptokit.base58 import get_bcaddress_version
 from collections import deque
@@ -131,6 +132,7 @@ def main():
     # implement some defaults, these are all explained in the example
     # configuration file
     config = dict(stratum={'port': 3333, 'address': '0.0.0.0'},
+                  procname='powerpool',
                   coinserv=[],
                   extranonce_serv_size=8,
                   extranonce_size=4,
@@ -250,8 +252,11 @@ def main():
             log.setLevel(log_level)
 
     logger.info("=" * 80)
-    logger.info("PowerPool stratum server starting up...")
+    logger.info("PowerPool stratum server ({}) starting up..."
+                .format(config['procname']))
     logger.debug(pformat(config))
+
+    setproctitle.setproctitle(config['procname'])
 
     # setup the pow function
     if config['pow_func'] == 'ltc_scrypt':
