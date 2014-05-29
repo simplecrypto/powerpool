@@ -56,9 +56,9 @@ def general():
                    jobs=len(net_state['jobs']),
                    shares=share_summary,
                    share_percs=dict(
-                       low_perc=low_tot / (acc_tot + low_tot) * 100.0,
-                       stale_perc=stale_tot / (acc_tot + stale_tot) * 100.0,
-                       dup_perc=dup_tot / (acc_tot + dup_tot) * 100.0,
+                       low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
+                       stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
+                       dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
                    ),
                    reject_dup=server_state['reject_dup'].summary(),
                    reject_low=server_state['reject_low'].summary(),
