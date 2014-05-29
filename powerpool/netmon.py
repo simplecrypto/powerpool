@@ -135,7 +135,9 @@ class MonitorNetwork(Greenlet):
             return True
         return False
 
-    def getblocktemplate(self, new_block=False):
+    def getblocktemplate(self, new_block=False, signal=False):
+        if signal:
+            print "Generating new job from signal!"
         dirty = False
         try:
             # request local memory pool and load it in

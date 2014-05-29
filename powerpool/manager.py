@@ -3,6 +3,8 @@ import argparse
 import collections
 import datetime
 import setproctitle
+import gevent
+import signal
 
 from cryptokit.base58 import get_bcaddress_version
 from collections import deque
@@ -48,6 +50,7 @@ def net_runner(net_state, config, stratum_clients, server_state, celery,
                 .format(threading.current_thread()))
     network = MonitorNetwork(stratum_clients, net_state, config,
                              server_state, celery)
+    gevent.signal(signal.SIGHUP, network.getblocktemplate, signal=True, new_block=True)
     for coin in config['merged']:
         if not coin['enabled']:
             continue
