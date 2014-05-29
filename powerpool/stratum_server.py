@@ -201,20 +201,22 @@ class StratumClient(GenericClient):
 
     @property
     def summary(self):
-        return dict(hr=self.hashrate, worker=self.worker, address=self.address)
+        return dict(kilo_hr=self.kilo_hashrate,
+                    worker=self.worker,
+                    address=self.address,
+                    transmit_over_accept=(self.transmitted_shares > self.accepted_shares))
 
     @property
-    def hashrate(self):
-        return (sum(self.valid_shares) * (2 ** 16)) / 1000000 / 600.0
+    def kilo_hashrate(self):
+        return (sum(self.valid_shares.itervalues()) * (2 ** 16)) / 1000 / 600.0
 
     @property
     def details(self):
-        return dict(dup_shares=sum(self.dup_shares),
-                    stale_shares=sum(self.stale_shares),
-                    low_diff_shares=sum(self.low_diff_shares),
-                    valid_shares=sum(self.valid_shares),
-                    accepted_shares=self.accepted_shares,
-                    transmitted_shares=self.transmitted_shares,
+        return dict(dup_shares=sum(self.dup_shares.itervalues()),
+                    stale_shares=sum(self.stale_shares.itervalues()),
+                    low_diff_shares=sum(self.low_diff_shares.itervalues()),
+                    valid_shares=sum(self.valid_shares.itervalues()),
+                    alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
                     address=self.address,

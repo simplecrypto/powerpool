@@ -41,6 +41,12 @@ def general():
 
     share_summary = server_state['shares'].summary()
     share_summary['megahashpersec'] = ((2 ** 16) * share_summary['min_total']) / 1000000 / 60.0
+
+    stale_tot = server_state['reject_stale'].total
+    low_tot = server_state['reject_low'].total
+    dup_tot = server_state['reject_dup'].total
+    acc_tot = server_state['shares'].total or 1
+
     return jsonify(stratum_clients=len(stratum_clients) - 2,
                    server_start=str(server_state['server_start']),
                    uptime=str(datetime.datetime.utcnow() - server_state['server_start']),
@@ -49,6 +55,11 @@ def general():
                    main_state=jsonize(net_state['work']),
                    jobs=len(net_state['jobs']),
                    shares=share_summary,
+                   share_percs=dict(
+                       low_perc=low_tot / (acc_tot + low_tot) * 100.0,
+                       stale_perc=stale_tot / (acc_tot + stale_tot) * 100.0,
+                       dup_perc=dup_tot / (acc_tot + dup_tot) * 100.0,
+                   ),
                    reject_dup=server_state['reject_dup'].summary(),
                    reject_low=server_state['reject_low'].summary(),
                    reject_stale=server_state['reject_stale'].summary(),
