@@ -10,42 +10,46 @@ logger = logging.getLogger('stats')
 cpu_times = (None, None)
 
 
-def stat_rotater(server_state, celery):
-    global cpu_times
-    last_tick = int(time.time())
-    last_send = (int(time.time()) // 60) * 60
-    while True:
-        now = time.time()
-        # time to rotate minutes?
-        if now > (last_send + 60):
-            shares = server_state['shares'].tock()
-            reject_low = server_state['reject_low'].tock()
-            reject_dup = server_state['reject_dup'].tock()
-            reject_stale = server_state['reject_stale'].tock()
-            server_state['stratum_connects'].tock()
-            server_state['stratum_disconnects'].tock()
-            server_state['agent_connects'].tock()
-            server_state['agent_disconnects'].tock()
+class StatMonitor(Greenlet):
+    def __init__(self, server_state, celery):
+        self.celery = celery
+        self.server_state = server_state
 
-            if shares or reject_dup or reject_low or reject_stale:
-                celery.send_task_pp(
-                    'add_one_minute', 'pool', shares, now, '', reject_dup,
-                    reject_low, reject_stale)
-            last_send += 60
+    def _run(self):
+        last_tick = int(time.time())
+        last_send = (int(time.time()) // 60) * 60
+        while True:
+            now = time.time()
+            # time to rotate minutes?
+            if now > (last_send + 60):
+                shares = self.server_state['shares'].tock()
+                reject_low = self.server_state['reject_low'].tock()
+                reject_dup = self.server_state['reject_dup'].tock()
+                reject_stale = self.server_state['reject_stale'].tock()
+                self.server_state['stratum_connects'].tock()
+                self.server_state['stratum_disconnects'].tock()
+                self.server_state['agent_connects'].tock()
+                self.server_state['agent_disconnects'].tock()
 
-        # time to tick?
-        if now > (last_tick + 1):
-            server_state['shares'].tick()
-            server_state['reject_low'].tick()
-            server_state['reject_dup'].tick()
-            server_state['reject_stale'].tick()
-            server_state['stratum_connects'].tick()
-            server_state['stratum_disconnects'].tick()
-            server_state['agent_connects'].tick()
-            server_state['agent_disconnects'].tick()
-            last_tick += 1
+                if shares or reject_dup or reject_low or reject_stale:
+                    self.celery.send_task_pp(
+                        'add_one_minute', 'pool', shares, now, '', reject_dup,
+                        reject_low, reject_stale)
+                last_send += 60
 
-        sleep(0.1)
+            # time to tick?
+            if now > (last_tick + 1):
+                self.server_state['shares'].tick()
+                self.server_state['reject_low'].tick()
+                self.server_state['reject_dup'].tick()
+                self.server_state['reject_stale'].tick()
+                self.server_state['stratum_connects'].tick()
+                self.server_state['stratum_disconnects'].tick()
+                self.server_state['agent_connects'].tick()
+                self.server_state['agent_disconnects'].tick()
+                last_tick += 1
+
+            sleep(0.1)
 
 
 class StatManager(object):

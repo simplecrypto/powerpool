@@ -10,9 +10,7 @@ from gevent import Greenlet
 from gevent.monkey import patch_all, patch_thread
 from gevent.wsgi import WSGIServer
 from gevent.pool import Pool
-patch_all(thread=False)
-# Patch our threading events so we can use thread safe event with gevent
-patch_thread(threading=False, _threading_local=False, Event=True)
+patch_all()
 import threading
 import logging
 from celery import Celery
@@ -30,22 +28,6 @@ logger = logging.getLogger('manager')
 
 def monitor_runner(net_state, config, stratum_clients, server_state,
                    agent_clients, exit_event):
-    logger.info("Monitor server starting up; Thread ID {}"
-                .format(threading.current_thread()))
-    monitor_app.config.update(config['monitor'])
-    monitor_app.config.update(dict(net_state=net_state,
-                                   config=config,
-                                   stratum_clients=stratum_clients,
-                                   agent_clients=agent_clients,
-                                   server_state=server_state))
-    wsgiserver = WSGIServer((config['monitor']['address'],
-                             config['monitor']['port']), monitor_app)
-    wsgiserver.start()
-    try:
-        exit_event.wait()
-    finally:
-        logger.info("Server monitor shutting down...")
-        Greenlet.spawn(wsgiserver.stop, timeout=None).join()
 
 
 def stat_runner(server_state, celery, exit_event):
@@ -333,21 +315,122 @@ def main():
         threads.append(monitor_thread)
         monitor_thread.start()
 
-    try:
-        while True:
-            for thread in threads:
-                thread.join(0.2)
-    except KeyboardInterrupt:
-        exit_event.set()
-        logger.info("Exiting requested via SIGINT, cleaning up...")
-        try:
-            net_thread.join(config['term_timeout'])
-            stratum_thread.join(config['term_timeout'])
-            if net_thread.isAlive() or stratum_thread.isAlive():
-                logger.info("Timeout reached, exiting without cleanup")
-            else:
-                logger.info("Cleanup complete, shutting down...")
-        except KeyboardInterrupt:
-            logger.info("Shutdown forced by system, exiting without cleanup")
 
-        logger.info("=" * 80)
+
+class PowerPool(object):
+
+    def __init__(self, config):
+        # A list of all the greenlets that are running
+        self.greenlets = []
+        # A list of all the StreamServers
+        self.servers = []
+
+    def _run(self):
+        # Logic for setting up the HTTP monitor
+        logger.info("HTTP statistics server starting up")
+        monitor_app.config.update(config['monitor'])
+        monitor_app.config.update(dict(net_state=net_state,
+                                       config=self.config,
+                                       stratum_clients=stratum_clients,
+                                       agent_clients=agent_clients,
+                                       server_state=server_state))
+        stat_server = WSGIServer((config['monitor']['address'],
+                                  config['monitor']['port']),
+                                 monitor_app)
+        stat_server.start()
+        self.servers.append(("HTTP statistics server", stat_server))
+
+        # Start the main chain network monitor and aux chain monitors
+        logger.info("Network monitor starting up")
+        network = MonitorNetwork(stratum_clients, net_state, config,
+                                 server_state, celery)
+        # start each aux chain monitor for merged mining
+        for coin in config['merged']:
+            if not coin['enabled']:
+                logger.info("Skipping aux chain support because it's disabled")
+                continue
+
+            logger.info("Aux network monitor for {} starting up"
+                        .format(coin['name']))
+            aux_network = MonitorAuxChain(server_state, net_state, config,
+                                          network, **coin)
+            aux_network.start()
+            self.greenlets.append(aux_network)
+
+        nodes = Greenlet(monitor_nodes, config, net_state)
+        nodes.start()
+        network.start()
+        self.greenlets.append(nodes)
+        self.greenlets.append(network)
+
+        # start the stratum stream server
+        logger.info("Stratum Server starting up")
+        sserver = StratumServer(
+            (config['stratum']['address'], config['stratum']['port']),
+            stratum_clients,
+            config,
+            net_state,
+            server_state,
+            celery,
+            spawn=Pool())
+        sserver.start()
+        self.servers.append(sserver)
+
+        logger.info("Stat manager starting up")
+        # a simple greenlet that rotates some of the servers stats
+        rotater = StatRotater(server_state, celery)
+        self.greenlets.append(("Stats rotater", rotater))
+
+        # the agent server. allows peers to connect and send stat data about
+        # a stratum worker
+        if config['agent']['enabled']:
+            agent_thread = threading.Thread(target=agent_runner, args=(
+                config, stratum_clients, agent_clients, server_state, celery,
+                exit_event))
+            agent_thread.daemon = True
+            threads.append(agent_thread)
+            agent_thread.start()
+
+        # the monitor server. a simple flask http server that lets you view
+        # internal data structures to monitor server health
+        if config['monitor']['enabled']:
+            monitor_thread = threading.Thread(target=monitor_runner, args=(
+                net_state, config, stratum_clients, server_state, agent_clients,
+                exit_event))
+            monitor_thread.daemon = True
+            threads.append(monitor_thread)
+            monitor_thread.start()
+
+        try:
+            while True:
+                for thread in threads:
+                    thread.join(0.2)
+        except KeyboardInterrupt:
+            logger.info("Exiting requested via SIGINT, cleaning up...")
+            # stop all stream servers
+            for name, server in self.servers:
+                logger.info("Requesting stop for {} server".format(name))
+                spawn(server.stop, timeout=config['term_timeout'])
+
+            # stop all greenlets
+            for name, gl in self.greenlet:
+                logger.info("Requesting stop for {} greenlet".format(name))
+                gl.kill(timeout=config['term_timeout'], block=False)
+
+            try:
+                while True:
+                    # restart the loop if any of the greenlets or servers are
+                    # still running
+                    for name, gl in self.greenlet:
+                        if not gl.ready():
+                            continue
+
+                    for name, gl in self.greenlet:
+                        if not gl.ready():
+                            continue
+            except KeyboardInterrupt:
+                logger.info("Shutdown requested again by system, "
+                            "exiting without cleanup")
+
+            logger.info("Timeout reached, shutting down forcefully")
+            logger.info("=" * 80)
