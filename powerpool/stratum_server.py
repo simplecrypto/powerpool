@@ -573,7 +573,7 @@ class StratumClient(GenericClient):
                 self.celery.send_task_pp('add_share', self.address, valid)
                 self.logger.info("Entering {} shares for {}.{}"
                                  .format(valid, self.address, self.worker))
-            self.last_graph_transmit = upper - self.time_seed
+            self.last_graph_transmit = upper
 
         # don't recalc their diff more often than interval
         if (self.config['vardiff']['enabled'] and
