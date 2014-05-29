@@ -131,6 +131,8 @@ class StratumClient(GenericClient):
         self.low_diff_shares = {}
         # running total for vardiff
         self.accepted_shares = 0
+        # debugging entry
+        self.transmitted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
         # last time we sent graphing data to the server
@@ -211,6 +213,8 @@ class StratumClient(GenericClient):
                     stale_shares=sum(self.stale_shares),
                     low_diff_shares=sum(self.low_diff_shares),
                     valid_shares=sum(self.valid_shares),
+                    accepted_shares=self.accepted_shares,
+                    transmitted_shares=self.transmitted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
                     address=self.address,
@@ -531,7 +535,7 @@ class StratumClient(GenericClient):
         should flush all shares we know about. If False only shares up until
         the last complete minute will be reported. """
         now = int(time())
-        if (now - self.last_graph_transmit) > 90 or flush:
+        if (now - self.last_graph_transmit + self.time_seed) > 90 or flush:
             # bounds for a share to be grouped for transmission in minute
             # chunks. the upper bound is the last minute that has
             # completely passed, while the lower bound is the last time we
@@ -571,6 +575,7 @@ class StratumClient(GenericClient):
 
             if valid > 0:
                 self.celery.send_task_pp('add_share', self.address, valid)
+                self.transmitted_shares += valid
                 self.logger.info("Entering {} shares for {}.{}"
                                  .format(valid, self.address, self.worker))
             self.last_graph_transmit = upper
