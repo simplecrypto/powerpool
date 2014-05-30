@@ -1,6 +1,9 @@
 import logging
 import bitcoinrpc
 import struct
+import urllib3
+import gevent
+import signal
 
 from future.utils import viewitems
 from binascii import unhexlify, hexlify
@@ -63,6 +66,15 @@ class MonitorNetwork(Greenlet):
             conn.name = "{}:{}".format(serv['address'], serv['port'])
             self._down_connections.append(conn)
 
+    def call_rpc(self, command, *args, **kwargs):
+        try:
+            getattr(self.coinserv, command)(*args, **kwargs)
+        except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
+            logger.warn("Unable to perform {} on RPC server. Got: {}"
+                        .format(command, e))
+            self.down_connection(self._poll_connection)
+            raise RPCException(e)
+
     def down_connection(self, conn):
         """ Called when a connection goes down. Removes if from the list of
         live connections and recomputes a new. """
@@ -92,9 +104,8 @@ class MonitorNetwork(Greenlet):
             for conn in self._down_connections:
                 try:
                     conn.getinfo()
-                except Exception:
-                    logger.info("RPC connection {} still down!"
-                                .format(conn.name))
+                except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException):
+                    logger.info("RPC connection {} still down!".format(conn.name))
                     continue
 
                 self._live_connections.append(conn)
@@ -208,10 +219,9 @@ class MonitorNetwork(Greenlet):
         if self._last_gbt is None:
             return
 
-        merged_work = self.merged_work
         if self.merged_work:
-            tree, size = bitcoin_data.make_auxpow_tree(merged_work)
-            mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
+            tree, size = bitcoin_data.make_auxpow_tree(self.merged_work)
+            mm_hashes = [self.merged_work.get(tree.get(i), dict(hash=0))['hash']
                          for i in xrange(size)]
             mm_data = '\xfa\xbemm'
             mm_data += bitcoin_data.aux_pow_coinbase_type.pack(dict(
@@ -220,7 +230,7 @@ class MonitorNetwork(Greenlet):
                 nonce=0,
             ))
             mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes)
-                        for chain_id, aux_work in merged_work.iteritems()]
+                        for chain_id, aux_work in self.merged_work.iteritems()]
         else:
             mm_later = []
             mm_data = None
@@ -288,6 +298,10 @@ class MonitorNetwork(Greenlet):
                                          bt_obj.total_value)
 
 
+class RPCException(Exception):
+    pass
+
+
 class MonitorAuxChain(Greenlet):
     def __init__(self, server, **kwargs):
         Greenlet.__init__(self)
@@ -316,49 +330,64 @@ class MonitorAuxChain(Greenlet):
             pool_kwargs=dict(maxsize=self.coinserv[0].get('maxsize', 10)))
         self.coinserv.config = self.coinservs[0]
 
+        if self.signal:
+            gevent.signal(self.signal, self.update, reason="Signal recieved")
+
+    def call_rpc(self, command, *args, **kwargs):
+        try:
+            getattr(self.coinserv, command)(*args, **kwargs)
+        except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
+            logger.warn("Unable to perform {} on RPC server. Got: {}"
+                        .format(command, e))
+            raise RPCException(e)
+
+    def update(self, reason=None):
+        if reason:
+            logger.info("Updating {} aux work from a signal recieved!"
+                        .format(self.name))
+
+        # cheap hack to prevent a race condition...
+        if self.netmon._poll_connection is None:
+            logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+            sleep(1)
+            return False
+
+        try:
+            auxblock = self.coinserv.getauxblock()
+        except RPCException:
+            sleep(2)
+            return False
+
+        #logger.debug("Aux RPC returned: {}".format(auxblock))
+        new_merged_work = dict(
+            hash=int(auxblock['hash'], 16),
+            target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
+            merged_proxy=self.coinserv,
+            monitor=self
+        )
+        self.state['chain_id'] = auxblock['chainid']
+        if new_merged_work != self.netmon.merged_work.get(auxblock['chainid']):
+            try:
+                height = self.coinserv.getblockcount()
+            except RPCException:
+                sleep(2)
+                return False
+            logger.info("New aux work announced! Diff {}. RPC returned: {}"
+                        .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
+                                new_merged_work))
+            self.netmon.merged_work[auxblock['chainid']] = new_merged_work
+            self.state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
+            # only push the job if there's a new block height discovered.
+            if self.state['height'] != height:
+                self.state['height'] = height
+                self.netmon.generate_job(push=True, flush=self.flush)
+                self.state['work_restarts'] += 1
+            else:
+                self.monitor_network.generate_job()
+                self.state['new_jobs'] += 1
+
     def _run(self):
         while True:
-            # cheap hack to prevent a race condition...
-            if self.netmon._poll_connection is None:
-                logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
-                sleep(1)
+            if not self.update():
                 continue
-
-            try:
-                auxblock = self.coinserv.getauxblock()
-            except Exception as e:
-                logger.warn("Unable to communicate with aux chain server. {}"
-                            .format(e))
-                sleep(2)
-                continue
-
-            #logger.debug("Aux RPC returned: {}".format(auxblock))
-            new_merged_work = dict(
-                hash=int(auxblock['hash'], 16),
-                target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
-                merged_proxy=self.coinserv,
-                monitor=self
-            )
-            self.state['chain_id'] = auxblock['chainid']
-            if new_merged_work != self.netmon.merged_work.get(auxblock['chainid']):
-                try:
-                    height = self.coinserv.getblockcount()
-                except Exception as e:
-                    logger.warn("Unable to communicate with aux chain server. {}"
-                                .format(e))
-                    sleep(2)
-                    continue
-                logger.info("New aux work announced! Diff {}. RPC returned: {}"
-                            .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
-                                    new_merged_work))
-                self.netmon.merged_work[auxblock['chainid']] = new_merged_work
-                self.state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
-                # only push the job if there's a new block height discovered.
-                if self.state['height'] != height:
-                    self.state['height'] = height
-                    self.monitor_network.generate_job(push=True, flush=self.flush)
-                    self.state['work_restarts'] += 1
-                else:
-                    self.monitor_network.generate_job()
-                    self.state['new_jobs'] += 1
             sleep(self.work_interval)

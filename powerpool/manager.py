@@ -86,6 +86,19 @@ def main():
         return d
     update(config, add_config)
 
+    # Add default values to all merged configs
+    merged_default = {'signal': None,
+                      'work_interval': 1,
+                      'flush': False,
+                      'send': True}
+    for i, cfg in enumerate(config['merged']):
+        dct = merged_default.copy()
+        dct.update(cfg)
+        config['merged'][i] = dct
+        if not dct.get('coinserv'):
+            logger.error("Aux shit won't work without a coinserver to connect to")
+            exit()
+
     for log_cfg in config['loggers']:
         ch = getattr(logging, log_cfg['type'])()
         log_level = getattr(logging, log_cfg['level'].upper())
@@ -229,6 +242,7 @@ class PowerPool(object):
         # Start the main chain network monitor and aux chain monitors
         logger.info("Network monitor starting up")
         network = MonitorNetwork(self)
+        self.netmon = network
         # start each aux chain monitor for merged mining
         for coin in self.config['merged']:
             if not coin['enabled']:
@@ -244,7 +258,6 @@ class PowerPool(object):
 
         network.start()
         self.greenlets.append(("Main network monitor", network))
-        self.netmon = network
 
         # start the stratum stream server
         ######
