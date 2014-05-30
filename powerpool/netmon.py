@@ -10,95 +10,128 @@ from cryptokit.block import BlockTemplate
 from cryptokit import bits_to_difficulty
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
-from gevent import sleep, Greenlet
+from gevent import sleep, Greenlet, spawn
 from copy import copy
 
 logger = logging.getLogger('netmon')
 
 
-def monitor_nodes(config, net_state):
-    """ Pings rpc interfaces periodically to see if they're up and makes the
-    initial connection to coinservers. """
-    coinserv = config['coinserv']
-    for serv in coinserv:
-        conn = bitcoinrpc.AuthServiceProxy(
-            "http://{0}:{1}@{2}:{3}/"
-            .format(serv['username'],
-                    serv['password'],
-                    serv['address'],
-                    serv['port']),
-            pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
-        conn.config = serv
-        conn.name = "{}:{}".format(serv['address'], serv['port'])
-        net_state['down_connections'].append(conn)
-    while True:
-        remlist = []
-        for conn in net_state['down_connections']:
-            try:
-                conn.getinfo()
-            except Exception:
-                logger.info("RPC connection {} still down!".format(conn.name))
-                continue
-
-            net_state['live_connections'].append(conn)
-            remlist.append(conn)
-            logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
-            # if this connection has a higher priority than current
-            if net_state['poll_connection'] is not None:
-                curr_poll = net_state['poll_connection'].config['poll_priority']
-                if conn.config['poll_priority'] > curr_poll:
-                    logger.info("RPC connection {} has higher poll priority than "
-                                "current poll connection, switching...".format(conn.name))
-                    net_state['poll_connection'] = conn
-            else:
-                net_state['poll_connection'] = conn
-                logger.info("RPC connection {} defaulting poll connection"
-                            .format(conn.name))
-
-        for conn in remlist:
-            net_state['down_connections'].remove(conn)
-
-        sleep(config['rpc_ping_int'])
-
-
-def down_connection(conn, net_state):
-    """ Called when a connection goes down. Removes if from the list of live
-    connections and recomputes a new. """
-    if conn in net_state['live_connections']:
-        net_state['live_connections'].remove(conn)
-
-    if net_state['poll_connection'] is conn:
-        # find the next best poll connection
-        try:
-            net_state['poll_connection'] = min(net_state['live_connections'],
-                                               key=lambda x: x.config['poll_priority'])
-        except ValueError:
-            net_state['poll_connection'] = None
-            logger.error("No RPC connections available for polling!!!")
-        else:
-            logger.warn("RPC connection {} switching to poll_connection after {} went down!"
-                        .format(net_state['poll_connection'].name, conn.name))
-
-    if conn not in net_state['down_connections']:
-        logger.info("Server at {} now reporting down".format(conn.name))
-        net_state['down_connections'].append(conn)
-
-
 class MonitorNetwork(Greenlet):
-    def __init__(self, stratum_clients, net_state, config, server_state, celery):
+    def __init__(self, server):
         Greenlet.__init__(self)
-        self.stratum_clients = stratum_clients
-        self.net_state = net_state
-        self.config = config
-        self.server_state = server_state
-        self.celery = celery
-        self.last_gbt = None
+        # convenient access to global objects
+        self.stratum_clients = server.stratum_clients
+        self.config = server.config
+        self.server = server
+        self.celery = server.celery
+        self.aux_managers = []
+
+        # internal vars
+        self._last_gbt = None
+        self._poll_connection = None
+        self._down_connections = []
+        self._live_connections = []
+        self._job_counter = 0
+        self._last_aux_update = dict()
+        self._node_monitor = None
+
+        self.jobs = {}
+        self.live_connections = []
+        self.latest_job = None
+        self.merged_work = {}
+        # general current network stats
+        self.current_net = dict(difficulty=None,
+                                height=None,
+                                subsidy=None)
+        self.block_stats = dict(accepts=0,
+                                rejects=0,
+                                solves=0,
+                                last_solve_height=None,
+                                last_solve_time=None,
+                                last_solve_worker=None)
+        self.recent_blocks = deque(maxlen=15)
+
+        for serv in self.config['coinserv']:
+            conn = bitcoinrpc.AuthServiceProxy(
+                "http://{0}:{1}@{2}:{3}/"
+                .format(serv['username'],
+                        serv['password'],
+                        serv['address'],
+                        serv['port']),
+                pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
+            conn.config = serv
+            conn.name = "{}:{}".format(serv['address'], serv['port'])
+            self._down_connections.append(conn)
+
+    def down_connection(self, conn):
+        """ Called when a connection goes down. Removes if from the list of
+        live connections and recomputes a new. """
+        if conn in self._live_connections:
+            self._live_connections.remove(conn)
+
+        if self._poll_connection is conn:
+            # find the next best poll connection
+            try:
+                self._poll_connection = min(self._live_connections,
+                                            key=lambda x: x.config['poll_priority'])
+            except ValueError:
+                self._poll_connection = None
+                logger.error("No RPC connections available for polling!!!")
+            else:
+                logger.warn("RPC connection {} switching to poll_connection "
+                            "after {} went down!"
+                            .format(self._poll_connection.name, conn.name))
+
+        if conn not in self._down_connections:
+            logger.info("Server at {} now reporting down".format(conn.name))
+            self._down_connections.append(conn)
+
+    def _monitor_nodes(self):
+        while True:
+            remlist = []
+            for conn in self._down_connections:
+                try:
+                    conn.getinfo()
+                except Exception:
+                    logger.info("RPC connection {} still down!"
+                                .format(conn.name))
+                    continue
+
+                self._live_connections.append(conn)
+                remlist.append(conn)
+                logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
+
+                # if this connection has a higher priority than current
+                if self._poll_connection is not None:
+                    curr_poll = self._poll_connection.config['poll_priority']
+                    if conn.config['poll_priority'] > curr_poll:
+                        logger.info("RPC connection {} has higher poll priority than "
+                                    "current poll connection, switching..."
+                                    .format(conn.name))
+                        self._poll_connection = conn
+                else:
+                    self._poll_connection = conn
+                    logger.info("RPC connection {} defaulting poll connection"
+                                .format(conn.name))
+
+            for conn in remlist:
+                self._down_connections.remove(conn)
+
+            sleep(self.config['rpc_ping_int'])
+
+    def kill(self, *args, **kwargs):
+        """ Override our default kill method and kill our child greenlets as
+        well """
+        self._node_monitor.kill(*args, **kwargs)
+        Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
+        # start watching our nodes to see if they're up or not
+        self._node_monitor = spawn(self._monitor_nodes)
         i = 0
         while True:
             try:
-                if self.net_state['poll_connection'] is None:
+                if self._poll_connection is None:
                     logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
                     sleep(1)
                     continue
@@ -124,14 +157,14 @@ class MonitorNetwork(Greenlet):
     def check_height(self):
         # check the block height
         try:
-            height = self.net_state['poll_connection'].getblockcount()
+            height = self._poll_connection.getblockcount()
         except Exception:
             logger.warn("Unable to communicate with server that thinks it's live.")
-            down_connection(self.net_state['poll_connection'], self.net_state)
+            self.down_connection(self._poll_connection)
             return False
 
-        if self.net_state['work']['height'] != height:
-            self.net_state['work']['height'] = height
+        if self.current_net['height'] != height:
+            self.current_net['height'] = height
             return True
         return False
 
@@ -141,7 +174,7 @@ class MonitorNetwork(Greenlet):
         dirty = False
         try:
             # request local memory pool and load it in
-            bt = self.net_state['poll_connection'].getblocktemplate(
+            bt = self._poll_connection.getblocktemplate(
                 {'capabilities': [
                     'coinbasevalue',
                     'coinbase/append',
@@ -153,12 +186,12 @@ class MonitorNetwork(Greenlet):
                 ]})
         except Exception as e:
             logger.warn("Failed to fetch new job. Reason: {}".format(e))
-            down_connection(self.net_state['poll_connection'], self.net_state)
+            self._down_connection(self._poll_connection)
             return False
 
         # generate a new job if we got some new work!
-        if bt != self.last_gbt:
-            self.last_gbt = bt
+        if bt != self._last_gbt:
+            self._last_gbt = bt
             dirty = True
 
         if new_block or dirty:
@@ -172,11 +205,11 @@ class MonitorNetwork(Greenlet):
         true a job restart will be triggered. """
 
         # aux monitors will often call this early when not needed at startup
-        if self.last_gbt is None:
+        if self._last_gbt is None:
             return
 
-        merged_work = self.net_state['merged_work']
-        if self.net_state['merged_work']:
+        merged_work = self.merged_work
+        if self.merged_work:
             tree, size = bitcoin_data.make_auxpow_tree(merged_work)
             mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
                          for i in xrange(size)]
@@ -201,40 +234,40 @@ class MonitorNetwork(Greenlet):
         extranonce_length = (self.config['extranonce_size'] +
                              self.config['extranonce_serv_size'])
         coinbase.inputs.append(
-            Input.coinbase(self.last_gbt['height'],
+            Input.coinbase(self._last_gbt['height'],
                            addtl_push=[mm_data] if mm_data else [],
                            extra_script_sig=b'\0' * extranonce_length))
         # simple output to the proper address and value
         coinbase.outputs.append(
-            Output.to_address(self.last_gbt['coinbasevalue'], self.config['pool_address']))
-        job_id = hexlify(struct.pack(str("I"), self.net_state['job_counter']))
+            Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
+        job_id = hexlify(struct.pack(str("I"), self._job_counter))
         logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}."
-                    .format(len(self.last_gbt['transactions']),
-                            bits_to_difficulty(self.last_gbt['bits']),
-                            self.last_gbt['coinbasevalue']))
-        bt_obj = BlockTemplate.from_gbt(self.last_gbt,
+                    .format(len(self._last_gbt['transactions']),
+                            bits_to_difficulty(self._last_gbt['bits']),
+                            self._last_gbt['coinbasevalue']))
+        bt_obj = BlockTemplate.from_gbt(self._last_gbt,
                                         coinbase,
                                         extranonce_length,
                                         [Transaction(unhexlify(t['data']), fees=t['fee'])
-                                         for t in self.last_gbt['transactions']])
+                                         for t in self._last_gbt['transactions']])
         bt_obj.mm_later = copy(mm_later)
         hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
         bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
         bt_obj.job_id = job_id
-        bt_obj.block_height = self.last_gbt['height']
+        bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
 
         if push:
             if flush:
                 logger.info("New work announced! Wiping previous jobs...")
-                self.net_state['jobs'].clear()
-                self.net_state['latest_job'] = None
+                self.jobs.clear()
+                self.latest_job = None
             else:
                 logger.info("New work announced!")
 
-        self.net_state['job_counter'] += 1
-        self.net_state['jobs'][job_id] = bt_obj
-        self.net_state['latest_job'] = job_id
+        self._job_counter += 1
+        self.jobs[job_id] = bt_obj
+        self.latest_job = job_id
         if push:
             for idx, client in viewitems(self.stratum_clients):
                 try:
@@ -247,7 +280,7 @@ class MonitorNetwork(Greenlet):
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
-            self.net_state['work']['difficulty'] = bits_to_difficulty(hex_bits)
+            self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
             if self.config['send_new_block']:
                 self.celery.send_task_pp('new_block',
                                          bt_obj.block_height,
@@ -256,25 +289,23 @@ class MonitorNetwork(Greenlet):
 
 
 class MonitorAuxChain(Greenlet):
-    def __init__(self, server_state, net_state, config, monitor_network, **kwargs):
+    def __init__(self, server, **kwargs):
         Greenlet.__init__(self)
-        self.net_state = net_state
-        self.server_state = server_state
-        self.config = config
-        self.monitor_network = monitor_network
+        self.netmon = server.netmon
+        self.server = server
+        self.config = server.config
         self.__dict__.update(kwargs)
-        self.server_state['aux_state'][self.name] = {'difficulty': None,
-                                                     'height': None,
-                                                     'chain_id': None,
-                                                     'block_solve': None,
-                                                     'work_restarts': 0,
-                                                     'new_jobs': 0,
-                                                     'solves': 0,
-                                                     'rejects': 0,
-                                                     'accepts': 0,
-                                                     'recent_blocks': deque(maxlen=15)}
-        # convenience
-        self.aux_state = self.server_state['aux_state'][self.name]
+        self.state = {'difficulty': None,
+                      'height': None,
+                      'chain_id': None,
+                      'block_solve': None,
+                      'work_restarts': 0,
+                      'new_jobs': 0,
+                      'solves': 0,
+                      'rejects': 0,
+                      'accepts': 0,
+                      'recent_blocks': deque(maxlen=15)}
+
         self.coinservs = self.coinserv
         self.coinserv = bitcoinrpc.AuthServiceProxy(
             "http://{0}:{1}@{2}:{3}/"
@@ -287,10 +318,12 @@ class MonitorAuxChain(Greenlet):
 
     def _run(self):
         while True:
-            if self.net_state['poll_connection'] is None:
+            # cheap hack to prevent a race condition...
+            if self.netmon._poll_connection is None:
                 logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
                 sleep(1)
                 continue
+
             try:
                 auxblock = self.coinserv.getauxblock()
             except Exception as e:
@@ -298,6 +331,7 @@ class MonitorAuxChain(Greenlet):
                             .format(e))
                 sleep(2)
                 continue
+
             #logger.debug("Aux RPC returned: {}".format(auxblock))
             new_merged_work = dict(
                 hash=int(auxblock['hash'], 16),
@@ -305,8 +339,8 @@ class MonitorAuxChain(Greenlet):
                 merged_proxy=self.coinserv,
                 monitor=self
             )
-            self.aux_state['chain_id'] = auxblock['chainid']
-            if new_merged_work != self.net_state['merged_work'].get(auxblock['chainid']):
+            self.state['chain_id'] = auxblock['chainid']
+            if new_merged_work != self.netmon.merged_work.get(auxblock['chainid']):
                 try:
                     height = self.coinserv.getblockcount()
                 except Exception as e:
@@ -317,14 +351,14 @@ class MonitorAuxChain(Greenlet):
                 logger.info("New aux work announced! Diff {}. RPC returned: {}"
                             .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
                                     new_merged_work))
-                self.net_state['merged_work'][auxblock['chainid']] = new_merged_work
-                self.aux_state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
+                self.netmon.merged_work[auxblock['chainid']] = new_merged_work
+                self.state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
                 # only push the job if there's a new block height discovered.
-                if self.aux_state['height'] != height:
-                    self.aux_state['height'] = height
+                if self.state['height'] != height:
+                    self.state['height'] = height
                     self.monitor_network.generate_job(push=True, flush=self.flush)
-                    self.aux_state['work_restarts'] += 1
+                    self.state['work_restarts'] += 1
                 else:
                     self.monitor_network.generate_job()
-                    self.aux_state['new_jobs'] += 1
+                    self.state['new_jobs'] += 1
             sleep(self.work_interval)

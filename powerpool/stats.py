@@ -1,4 +1,4 @@
-from gevent import sleep
+from gevent import sleep, Greenlet
 from collections import deque
 
 import threading
@@ -11,9 +11,10 @@ cpu_times = (None, None)
 
 
 class StatMonitor(Greenlet):
-    def __init__(self, server_state, celery):
-        self.celery = celery
-        self.server_state = server_state
+    def __init__(self, server):
+        Greenlet.__init__(self)
+        self.celery = server.celery
+        self.server = server
 
     def _run(self):
         last_tick = int(time.time())
@@ -26,10 +27,10 @@ class StatMonitor(Greenlet):
                 reject_low = self.server_state['reject_low'].tock()
                 reject_dup = self.server_state['reject_dup'].tock()
                 reject_stale = self.server_state['reject_stale'].tock()
-                self.server_state['stratum_connects'].tock()
-                self.server_state['stratum_disconnects'].tock()
-                self.server_state['agent_connects'].tock()
-                self.server_state['agent_disconnects'].tock()
+                self.server.stratum_connects.tock()
+                self.server.stratum_disconnects.tock()
+                self.server.agent_connects.tock()
+                self.server.agent_disconnects.tock()
 
                 if shares or reject_dup or reject_low or reject_stale:
                     self.celery.send_task_pp(
@@ -39,14 +40,14 @@ class StatMonitor(Greenlet):
 
             # time to tick?
             if now > (last_tick + 1):
-                self.server_state['shares'].tick()
-                self.server_state['reject_low'].tick()
-                self.server_state['reject_dup'].tick()
-                self.server_state['reject_stale'].tick()
-                self.server_state['stratum_connects'].tick()
-                self.server_state['stratum_disconnects'].tick()
-                self.server_state['agent_connects'].tick()
-                self.server_state['agent_disconnects'].tick()
+                self.server.shares.tick()
+                self.server.reject_low.tick()
+                self.server.reject_dup.tick()
+                self.server.reject_stale.tick()
+                self.server.stratum_connects.tick()
+                self.server.stratum_disconnects.tick()
+                self.server.agent_connects.tick()
+                self.server.agent_disconnects.tick()
                 last_tick += 1
 
             sleep(0.1)

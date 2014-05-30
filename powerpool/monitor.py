@@ -1,6 +1,10 @@
 from flask import Flask, jsonify, abort
 from itertools import chain
 from collections import deque
+from cryptokit.block import BlockTemplate
+from cryptokit.transaction import Transaction
+
+from .stats import StatManager
 
 import logging
 import sys
@@ -23,13 +27,43 @@ def jsonize(item):
             else:
                 new[k] = jsonize(v)
         return new
-    elif isinstance(item, list):
+    elif isinstance(item, list) or isinstance(item, tuple):
         new = []
         for part in item:
             new.append(jsonize(part))
         return new
     else:
-        return item
+        if isinstance(item, StatManager):
+            return item.summary()
+        elif isinstance(item, BlockTemplate):
+            return jsonize(item.__dict__)
+        elif isinstance(item, Transaction):
+            item.disassemble()
+            return item.to_dict()
+        elif isinstance(item, str):
+            return item.encode('string_escape')
+        elif isinstance(item, set):
+            return list(item)
+        elif (isinstance(item, float) or
+                isinstance(item, int) or
+                item is None or
+                isinstance(item, bool)):
+            return item
+        else:
+            return str(item)
+
+
+@monitor_app.route('/debug')
+def debug():
+    if not monitor_app.config['DEBUG']:
+        abort(403)
+    server = monitor_app.config['server']
+    return jsonify(server=jsonize(server.__dict__),
+                   netmon=jsonize(server.netmon.__dict__),
+                   stratum_clients=jsonize(server.stratum_clients),
+                   stratum_clients_addr_lut=jsonize(server.stratum_clients.address_lut.items()),
+                   stratum_clients_worker_lut=jsonize(server.stratum_clients.addr_worker_lut.items())
+                   )
 
 
 @monitor_app.route('/')
@@ -47,7 +81,7 @@ def general():
     dup_tot = server_state['reject_dup'].total
     acc_tot = server_state['shares'].total or 1
 
-    return jsonify(stratum_clients=len(stratum_clients) - 2,
+    return jsonify(stratum_clients=len(stratum_clients),
                    server_start=str(server_state['server_start']),
                    uptime=str(datetime.datetime.utcnow() - server_state['server_start']),
                    agent_clients=len(agent_clients),

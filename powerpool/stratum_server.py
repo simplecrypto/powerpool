@@ -37,22 +37,15 @@ password_arg_parser.add_argument('-d', '--diff', type=int)
 
 class StratumServer(GenericServer):
 
-    def __init__(self, listener, stratum_clients, config, net_state,
-                 server_state, celery, **kwargs):
+    def __init__(self, listener, server, **kwargs):
         super(GenericServer, self).__init__(listener, **kwargs)
-        self.stratum_clients = stratum_clients
-        self.config = config
-        self.net_state = net_state
-        self.server_state = server_state
-        self.celery = celery
+        self.server = server
         self.id_count = 0
 
     def handle(self, sock, address):
-        # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 1
-        self.server_state['stratum_connects'].incr()
-        StratumClient(sock, address, self.id_count, self.stratum_clients,
-                      self.config, self.net_state, self.server_state, self.celery)
+        self.server.stratum_connects.incr()
+        StratumClient(sock, address, self.id_count, self.server)
 
 
 class StratumClient(GenericClient):
@@ -87,8 +80,7 @@ class StratumClient(GenericClient):
         VALID_SHARE: 'valid_shares'
     }
 
-    def __init__(self, sock, address, id, stratum_clients, config, net_state,
-                 server_state, celery):
+    def __init__(self, sock, address, id, server):
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
                          .format(address, sock))
 
@@ -100,11 +92,11 @@ class StratumClient(GenericClient):
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
         # global items
-        self.config = config
-        self.net_state = net_state
-        self.stratum_clients = stratum_clients
-        self.server_state = server_state
-        self.celery = celery
+        self.server = server
+        self.config = server.config
+        self.netmon = server.netmon
+        self.stratum_clients = server.stratum_clients
+        self.celery = server.celery
 
         # register client into the client dictionary
         self.sock = sock
@@ -156,6 +148,7 @@ class StratumClient(GenericClient):
         # where we put all the messages that need to go out
         self.write_queue = Queue()
         write_greenlet = None
+        self.fp = None
 
         try:
             self.peer_name = sock.getpeername()
@@ -175,27 +168,14 @@ class StratumClient(GenericClient):
             except socket.error:
                 pass
             try:
-                self.fp.close()
+                if self.fp:
+                    self.fp.close()
                 self.sock.close()
             except (socket.error, AttributeError):
                 pass
             self.report_shares(flush=True)
-            self.server_state['stratum_disconnects'].incr()
+            self.server.stratum_disconnects.incr()
             del self.stratum_clients[self.id]
-            addr_worker = (self.address, self.worker)
-            # clear the worker from the luts
-            try:
-                del self.stratum_clients['addr_worker_lut'][addr_worker]
-            except KeyError:
-                pass
-            try:
-                # remove from lut for address
-                self.stratum_clients['address_lut'][self.address].remove(self)
-                # delete the list if its empty
-                if not len(self.stratum_clients['address_lut'][self.address]):
-                    del self.stratum_clients['address_lut'][self.address]
-            except (ValueError, KeyError):
-                pass
 
             self.logger.info("Closing connection for client {}".format(self.id))
 
@@ -275,9 +255,9 @@ class StratumClient(GenericClient):
         invalid."""
         job = None
         while True:
-            jobid = self.net_state['latest_job']
+            jobid = self.netmon.latest_job
             try:
-                job = self.net_state['jobs'][jobid]
+                job = self.netmon.jobs[jobid]
                 break
             except KeyError:
                 self.logger.warn("No jobs available for worker!")
@@ -331,16 +311,16 @@ class StratumClient(GenericClient):
             # since we can't identify the diff we just have to assume it's
             # current diff
             self.send_error(self.STALE_SHARE)
-            self.server_state['reject_stale'].incr(self.difficulty)
+            self.server.reject_stale.incr(self.difficulty)
             return self.STALE_SHARE, self.difficulty
 
         # lookup the job in the global job dictionary. If it's gone from here
         # then a new block was announced which wiped it
         try:
-            job = self.net_state['jobs'][jobid]
+            job = self.netmon.jobs[jobid]
         except KeyError:
             self.send_error(self.STALE_SHARE)
-            self.server_state['reject_stale'].incr(difficulty)
+            self.server.reject_stale.incr(difficulty)
             return self.STALE_SHARE, difficulty
 
         # assemble a complete block header bytestring
@@ -357,7 +337,7 @@ class StratumClient(GenericClient):
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE)
-            self.server_state['reject_dup'].incr(difficulty)
+            self.server.reject_dup.incr(difficulty)
             return self.DUP_SHARE, difficulty
 
         job_target = target_from_diff(difficulty, self.config['diff1'])
@@ -366,7 +346,7 @@ class StratumClient(GenericClient):
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF)
-            self.server_state['reject_low'].incr(difficulty)
+            self.server.reject_low.incr(difficulty)
             return self.LOW_DIFF, difficulty
 
         # we want to send an ack ASAP, so do it here
@@ -375,16 +355,17 @@ class StratumClient(GenericClient):
                           .format(self.address, self.worker))
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
-        self.server_state['shares'].incr(difficulty)
+        self.server.shares.incr(difficulty)
 
         header_hash = sha256(sha256(header).digest()).digest()[::-1]
         header_hash_int = bitcoin_data.hash256(header)
+        hash_hex = hexlify(header_hash)
 
         def check_merged_block(mm_later):
             aux_work, index, hashes = mm_later
             if hash_int <= aux_work['target']:
                 monitor = aux_work['monitor']
-                self.server_state['aux_state'][monitor.name]['solves'] += 1
+                self.server.aux_state[monitor.name]['solves'] += 1
                 self.logger.log(36, "New {} Aux Block identified!".format(monitor.name))
                 aux_block = (
                     pack.IntType(256, 'big').pack(aux_work['hash']).encode('hex'),
@@ -402,7 +383,7 @@ class StratumClient(GenericClient):
                 retries = 0
                 while retries < 5:
                     retries += 1
-                    new_height = self.server_state['aux_state'][monitor.name]['height'] + 1
+                    new_height = self.server.aux_state[monitor.name]['height'] + 1
                     try:
                         res = aux_work['merged_proxy'].getauxblock(*aux_block)
                     except (CoinRPCException, socket.error, ValueError) as e:
@@ -412,9 +393,9 @@ class StratumClient(GenericClient):
 
                     if res is True:
                         self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(monitor.name))
-                        self.server_state['aux_state'][monitor.name]['block_solve'] = int(time())
-                        self.server_state['aux_state'][monitor.name]['accepts'] += 1
-                        self.server_state['aux_state'][monitor.name]['recent_blocks'].append(
+                        self.server.aux_state[monitor.name]['block_solve'] = int(time())
+                        self.server.aux_state[monitor.name]['accepts'] += 1
+                        self.server.aux_state[monitor.name]['recent_blocks'].append(
                             dict(height=new_height, timestamp=int(time())))
                         if monitor.send:
                             self.logger.info("Submitting {} new block to celery".format(monitor.name))
@@ -450,7 +431,7 @@ class StratumClient(GenericClient):
                             exc_info=True)
                     sleep(1)
                 else:
-                    self.server_state['aux_state'][monitor.name]['rejects'] += 1
+                    self.server.aux_state[monitor.name]['rejects'] += 1
 
         for mm in job.mm_later:
             spawn(check_merged_block, mm)
@@ -459,6 +440,7 @@ class StratumClient(GenericClient):
         if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
+        self.netmon.block_stats['solves'] += 1
         block = hexlify(job.submit_serial(header))
 
         def submit_block(conn):
@@ -483,10 +465,9 @@ class StratumClient(GenericClient):
                         self.logger.error(getattr(e, 'error'))
 
                 if res is None:
-                    self.net_state['work']['accepts'] += 1
-                    self.net_state['work']['recent_blocks'].append(
+                    self.netmon.block_stats['accepts'] += 1
+                    self.netmon.recent_blocks.append(
                         dict(height=job.block_height, timestamp=int(time())))
-                    hash_hex = hexlify(header_hash)
                     self.celery.send_task_pp(
                         'add_block',
                         self.address,
@@ -497,7 +478,7 @@ class StratumClient(GenericClient):
                         hash_hex)
                     self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
                                      .format(conn.name))
-                    self.server_state['block_solve'] = int(time())
+                    self.netmon.block_solve = int(time())
                     break  # break retry loop if success
                 else:
                     self.logger.error(
@@ -507,23 +488,21 @@ class StratumClient(GenericClient):
                 sleep(1)
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
             else:
-                self.net_state['work']['rejects'] += 1
-        for conn in self.net_state['live_connections']:
+                self.netmon.block_stats['rejects'] += 1
+
+        for conn in self.netmon.live_connections:
             # spawn a new greenlet for each submission to do them all async.
             # lower orphan chance
             spawn(submit_block, conn)
 
-        try:
-            self.logger.log(35, "Valid network block identified!")
-            self.logger.info("New block at height %i" % self.net_state['work']['height'])
-            self.logger.info("Block coinbase hash %s" % job.coinbase.lehexhash)
-            self.logger.log(35, "New block hex dump:\n{}".format(block))
-            self.logger.log(35, "Coinbase: {}".format(str(job.coinbase.to_dict())))
-            for trans in job.transactions:
-                self.logger.log(35, str(trans.to_dict()))
-        except Exception:
-            # because I'm paranoid...
-            self.logger.error("Unexcpected exception in block logging!", exc_info=True)
+        self.logger.log(35, "Valid network block identified!")
+        self.logger.info("New block at height {} with hash {} and subsidy {}"
+                         .format(self.netmon.current_net['height'],
+                                 job.total_value, hash_hex))
+        self.logger.debug("New block hex dump:\n{}".format(block))
+        self.logger.info("Coinbase: {}".format(str(job.coinbase.to_dict())))
+        for trans in job.transactions:
+            self.logger.debug(str(trans.to_dict()))
 
         return self.BLOCK_FOUND, difficulty
 
@@ -618,12 +597,9 @@ class StratumClient(GenericClient):
         self.logger.info("Authentication request from {} for username {}"
                          .format(self.peer_name[0], username))
         user_worker = self.convert_username(username)
-        # setup lookup table for easier access from other read sources
-        self.stratum_clients['addr_worker_lut'][user_worker] = self
-        self.stratum_clients['address_lut'].setdefault(user_worker[0], [])
-        self.stratum_clients['address_lut'][user_worker[0]].append(self)
         # unpack into state dictionary
         self.address, self.worker = user_worker
+        self.stratum_clients.set_user(self)
         self.authenticated = True
         self.send_success(self.msg_id)
         self.push_difficulty()

@@ -11,22 +11,15 @@ from .server import GenericServer, GenericClient
 
 class AgentServer(GenericServer):
 
-    def __init__(self, listener, stratum_clients, config, agent_clients,
-                 server_state, celery, **kwargs):
+    def __init__(self, listener, server, **kwargs):
         super(GenericServer, self).__init__(listener, **kwargs)
-        self.stratum_clients = stratum_clients
-        self.agent_clients = agent_clients
-        self.config = config
-        self.server_state = server_state
-        self.celery = celery
+        self.server = server
         self.id_count = 0
 
     def handle(self, sock, address):
-        # Warning: Not thread safe in the slightest, should be good for gevent
         self.id_count += 1
-        self.server_state['agent_connects'].incr()
-        AgentClient(sock, address, self.id_count, self.stratum_clients,
-                    self.config, self.agent_clients, self.server_state, self.celery)
+        self.server.agent_connects.incr()
+        AgentClient(sock, address, self.id_count, self.server)
 
 
 class AgentClient(GenericClient):
@@ -44,8 +37,7 @@ class AgentClient(GenericClient):
         36: 'Invalid format for method',
     }
 
-    def __init__(self, sock, address, id_count, stratum_clients, config,
-                 agent_clients, server_state, celery):
+    def __init__(self, sock, address, id_count, server):
         self.logger.info("Recieving agent connection from addr {} on sock {}"
                          .format(address, sock))
 
@@ -56,28 +48,28 @@ class AgentClient(GenericClient):
         # Failed keepalive probles before declaring other end dead
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
-        self.sock = sock
-        self.fp = sock.makefile()
+        self._sock = sock
+        self._fp = sock.makefile()
 
-        # global items
-        self.config = config
-        self.stratum_clients = stratum_clients
-        self.agent_clients = agent_clients
-        self.server_state = server_state
-        self.celery = celery
+        # convenient access to global state
+        self.server = server
+        self.config = server.config
+        self.stratum_clients = server.stratum_clients
+        self.agent_clients = server.agent_clients
+        self.celery = server.celery
 
         self._disconnected = False
-        self.authenticated = False
-        self.client_state = None
-        self.authed = {}
-        self.client_version = None
-        self.connection_time = time()
-        self.id = id_count
+        self._authenticated = False
+        self._client_state = None
+        self._authed = {}
+        self._client_version = None
+        self._connection_time = time()
+        self._id = id_count
 
-        self.agent_clients[self.id] = self
+        self.agent_clients[self._id] = self
 
         # where we put all the messages that need to go out
-        self.write_queue = Queue()
+        self._write_queue = Queue()
 
         try:
             write_greenlet = spawn(self.write_loop)
@@ -97,10 +89,10 @@ class AgentClient(GenericClient):
                 self.sock.close()
             except socket.error:
                 pass
-            self.server_state['agent_disconnects'].incr()
+            self.server.agent_disconnects.incr()
             if self.client_state:
                 try:
-                    del self.agent_clients[self.id]
+                    del self.agent_clients[self._id]
                 except KeyError:
                     pass
 
@@ -108,19 +100,19 @@ class AgentClient(GenericClient):
 
     @property
     def summary(self):
-        return dict(workers=self.authed, connection_time=self.connection_time_dt)
+        return dict(workers=self._authed, connection_time=self._connection_time_dt)
 
     def send_error(self, num=20):
         """ Utility for transmitting an error to the client """
         err = {'result': None, 'error': (num, self.errors[num], None)}
         self.logger.debug("error response: {}".format(err))
-        self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
+        self._write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self):
         """ Utility for transmitting success to the client """
         succ = {'result': True, 'error': None}
         self.logger.debug("success response: {}".format(succ))
-        self.write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
+        self._write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
 
     def read_loop(self):
         # do a finally call to cleanup when we exit
@@ -131,7 +123,7 @@ class AgentClient(GenericClient):
                 break
 
             line = with_timeout(self.config['agent']['timeout'],
-                                self.fp.readline,
+                                self._fp.readline,
                                 timeout_value='timeout')
 
             # push a new job every timeout seconds if requested
@@ -162,11 +154,11 @@ class AgentClient(GenericClient):
                     if self.client_version is not None:
                         self.send_error(32)
                         continue
-                    self.client_version = data.get('params', [0.1])[0]
+                    self._client_version = data.get('params', [0.1])[0]
                     self.logger.info("Agent {} identified as version {}"
-                                     .format(self.id, self.client_version))
+                                     .format(self._id, self._client_version))
                 elif meth == 'worker.authenticate':
-                    if self.client_version is None:
+                    if self._client_version is None:
                         self.send_error(33)
                         continue
                     username = data.get('params', [""])[0]
@@ -177,16 +169,16 @@ class AgentClient(GenericClient):
                         self.send_error(31)
 
                     # here's where we do some top security checking...
-                    self.authed[username] = user_worker
+                    self._authed[username] = user_worker
                     self.send_success()
                     self.logger.info("Agent {} authenticated worker {}"
                                      .format(self.id, username))
                 elif meth == "stats.submit":
-                    if self.client_version is None:
+                    if self._client_version is None:
                         self.send_error(33)
                         continue
 
-                    if data.get('params', [''])[0] not in self.authed:
+                    if data.get('params', [''])[0] not in self._authed:
                         self.send_error(34)
                         continue
 
@@ -196,7 +188,7 @@ class AgentClient(GenericClient):
 
                     user_worker, typ, data, stamp = data['params']
                     # lookup our authed usernames translated creds
-                    address, worker = self.authed[user_worker]
+                    address, worker = self._authed[user_worker]
                     if typ in self.config['agent']['accepted_types']:
                         self.celery.send_task_pp(
                             'agent_receive', address, worker, typ, data, stamp)

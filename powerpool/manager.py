@@ -8,104 +8,24 @@ import signal
 
 from cryptokit.base58 import get_bcaddress_version
 from collections import deque
-from gevent import Greenlet
-from gevent.monkey import patch_all, patch_thread
+from gevent import spawn
+from gevent.monkey import patch_all
+from gevent.event import Event
 from gevent.wsgi import WSGIServer
 from gevent.pool import Pool
 patch_all()
-import threading
 import logging
 from celery import Celery
 from pprint import pformat
 
-from .netmon import MonitorNetwork, monitor_nodes, MonitorAuxChain
+from .netmon import MonitorNetwork, MonitorAuxChain
 from .stratum_server import StratumServer
 from .agent_server import AgentServer
-from .stats import stat_rotater, StatManager
+from .stats import StatMonitor, StatManager
 from .monitor import monitor_app
 
 
 logger = logging.getLogger('manager')
-
-
-def monitor_runner(net_state, config, stratum_clients, server_state,
-                   agent_clients, exit_event):
-
-
-def stat_runner(server_state, celery, exit_event):
-    logger.info("Stat manager starting up; Thread ID {}"
-                .format(threading.current_thread()))
-    # a simple greenlet that rotates some of the servers stats
-    rotater = Greenlet.spawn(stat_rotater, server_state, celery)
-    try:
-        exit_event.wait()
-    finally:
-        logger.info("Stat manager shutting down...")
-        rotater.kill()
-
-
-def net_runner(net_state, config, stratum_clients, server_state, celery,
-               exit_event):
-    logger.info("Network monitor starting up; Thread ID {}"
-                .format(threading.current_thread()))
-    network = MonitorNetwork(stratum_clients, net_state, config,
-                             server_state, celery)
-    gevent.signal(signal.SIGHUP, network.getblocktemplate, signal=True, new_block=True)
-    for coin in config['merged']:
-        if not coin['enabled']:
-            continue
-        logger.info("Aux network monitor for {} starting up; Thread ID {}"
-                    .format(coin['name'], threading.current_thread()))
-        aux_network = MonitorAuxChain(server_state, net_state, config, network, **coin)
-        aux_network.start()
-    nodes = Greenlet(monitor_nodes, config, net_state)
-    nodes.start()
-    network.start()
-    try:
-        exit_event.wait()
-    finally:
-        logger.info("Network monitor thread shutting down...")
-
-
-def agent_runner(config, stratum_clients, agent_clients, server_state, celery,
-                 exit_event):
-    # start the stratum server reactor thread
-    logger.info("Agent server starting up; Thread ID {}"
-                .format(threading.current_thread()))
-    sserver = AgentServer(
-        (config['agent']['address'], config['agent']['port']),
-        stratum_clients,
-        config,
-        agent_clients,
-        server_state,
-        celery)
-    sserver.start()
-    try:
-        exit_event.wait()
-    finally:
-        logger.info("Agent server shutting down...")
-        Greenlet.spawn(sserver.stop, timeout=None).join()
-
-
-def stratum_runner(net_state, config, stratum_clients, server_state, celery,
-                   exit_event):
-    # start the stratum server reactor thread
-    logger.info("Stratum Server starting up; Thread ID {}"
-                .format(threading.current_thread()))
-    sserver = StratumServer(
-        (config['stratum']['address'], config['stratum']['port']),
-        stratum_clients,
-        config,
-        net_state,
-        server_state,
-        celery,
-        spawn=Pool())
-    sserver.start()
-    try:
-        exit_event.wait()
-    finally:
-        logger.info("Stratum Server shutting down...")
-        Greenlet.spawn(sserver.stop, timeout=None).join()
 
 
 def main():
@@ -166,62 +86,6 @@ def main():
         return d
     update(config, add_config)
 
-    # setup our celery agent
-    celery = Celery()
-    celery.conf.update(config['celery'])
-
-    # monkey patch the celery object to make sending tasks easy
-    def send_task_pp(self, name, *args, **kwargs):
-        self.send_task(config['celery_task_prefix'] + '.' + name, args, kwargs)
-    Celery.send_task_pp = send_task_pp
-
-    # stored state of all greenlets. holds events that can be triggered, etc
-    stratum_clients = {'addr_worker_lut': {}, 'address_lut': {}}
-
-    # all the agent connections
-    agent_clients = {}
-
-    # the network monitor stores the current coin network state here
-    net_state = {
-        # rpc connections in either state
-        'poll_connection': None,
-        'live_connections': [],
-        'down_connections': [],
-        # index of all jobs currently accepting work. Contains complete
-        # block templates
-        'jobs': {},
-        # the job that should be sent to clients needing work
-        'latest_job': None,
-        'job_counter': 0,
-        'work': {'difficulty': None,
-                 'height': None,
-                 'block_solve': None,
-                 'work_restarts': 0,
-                 'new_jobs': 0,
-                 'rejects': 0,
-                 'accepts': 0,
-                 'solves': 0,
-                 'recent_blocks': deque(maxlen=15)},
-        'merged_work': {}
-    }
-
-    # holds counters, timers, etc that have to do with overall server state
-    server_state = {
-        'server_start': datetime.datetime.utcnow(),
-        'block_solve': None,
-        'aux_state': {},
-        'shares': StatManager(),
-        'reject_low': StatManager(),
-        'reject_dup': StatManager(),
-        'reject_stale': StatManager(),
-        'stratum_connects': StatManager(),
-        'stratum_disconnects': StatManager(),
-        'agent_connects': StatManager(),
-        'agent_disconnects': StatManager(),
-    }
-
-    exit_event = threading.Event()
-
     for log_cfg in config['loggers']:
         ch = getattr(logging, log_cfg['type'])()
         log_level = getattr(logging, log_cfg['level'].upper())
@@ -276,164 +140,194 @@ def main():
         logger.error("You need to specify a celery prefix")
         exit()
 
-    threads = []
-    # the thread that monitors the network for new jobs and blocks
-    net_thread = threading.Thread(target=net_runner, args=(
-        net_state, config, stratum_clients, server_state, celery, exit_event))
-    net_thread.daemon = True
-    threads.append(net_thread)
-    net_thread.start()
+    server = PowerPool(config)
+    server.run()
 
-    # stratum thread. interacts with clients. sends them jobs and accepts work
-    stratum_thread = threading.Thread(target=stratum_runner, args=(
-        net_state, config, stratum_clients, server_state, celery, exit_event))
-    stratum_thread.daemon = True
-    threads.append(stratum_thread)
-    stratum_thread.start()
 
-    # task in charge of rotating stats as needed
-    stat_thread = threading.Thread(target=stat_runner, args=(
-        server_state, celery, exit_event))
-    stat_thread.daemon = True
-    threads.append(stat_thread)
-    stat_thread.start()
+class StratumClients(dict):
+    """ A simple class that wraps and manages some lookup tables for quickly
+    finding stratum clients based on address or (address, worker) tuples. Also
+    houses data structure holding all client references. """
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+        self.addr_worker_lut = {}
+        self.address_lut = {}
 
-    # the agent server. allows peers to connect and send stat data about
-    # a stratum worker
-    if config['agent']['enabled']:
-        agent_thread = threading.Thread(target=agent_runner, args=(
-            config, stratum_clients, agent_clients, server_state, celery,
-            exit_event))
-        agent_thread.daemon = True
-        threads.append(agent_thread)
-        agent_thread.start()
+    def set_user(self, client):
+        # setup lookup table for easier access from other read sources
+        user_worker = (client.address, client.worker)
+        self.addr_worker_lut[user_worker] = self
+        self.address_lut.setdefault(user_worker[0], [])
+        self.address_lut[user_worker[0]].append(self)
 
-    # the monitor server. a simple flask http server that lets you view
-    # internal data structures to monitor server health
-    if config['monitor']['enabled']:
-        monitor_thread = threading.Thread(target=monitor_runner, args=(
-            net_state, config, stratum_clients, server_state, agent_clients,
-            exit_event))
-        monitor_thread.daemon = True
-        threads.append(monitor_thread)
-        monitor_thread.start()
-
+    def __delitem__(self, key):
+        """ Manages removing the client from the luts on regular delete """
+        obj = self[key]
+        dict.__delitem__(self, key)
+        # clear the address from the luts
+        try:
+            # remove from lut for address
+            self.address_lut[obj.address].remove(self)
+            # delete the list if its empty
+            if not len(self.address_lut[obj.address]):
+                del self.address_lut[obj.address]
+        except (ValueError, KeyError):
+            pass
+        # clear the worker from the luts
+        try:
+            del self.addr_worker_lut[(obj.address, obj.worker)]
+        except KeyError:
+            pass
 
 
 class PowerPool(object):
-
     def __init__(self, config):
+        self.config = config
+
+        # bookkeeping for things to request exit from at exit time
         # A list of all the greenlets that are running
         self.greenlets = []
         # A list of all the StreamServers
         self.servers = []
 
-    def _run(self):
-        # Logic for setting up the HTTP monitor
-        logger.info("HTTP statistics server starting up")
-        monitor_app.config.update(config['monitor'])
-        monitor_app.config.update(dict(net_state=net_state,
-                                       config=self.config,
-                                       stratum_clients=stratum_clients,
-                                       agent_clients=agent_clients,
-                                       server_state=server_state))
-        stat_server = WSGIServer((config['monitor']['address'],
-                                  config['monitor']['port']),
-                                 monitor_app)
-        stat_server.start()
-        self.servers.append(("HTTP statistics server", stat_server))
+        # setup our celery agent and monkey patch
+        self.celery = Celery()
+        self.celery.conf.update(config['celery'])
 
+        # monkey patch the celery object to make sending tasks easy
+        def send_task_pp(self, name, *args, **kwargs):
+            self.send_task(config['celery_task_prefix'] + '.' + name, args, kwargs)
+        Celery.send_task_pp = send_task_pp
+
+        # Primary systems
+        self.stratum_clients = StratumClients()
+        self.agent_clients = {}
+        # The network monitor object
+        self.netmon = None
+        # Aux network monitors (merged mining)
+        self.auxmons = []
+
+        self.stratum_servers = []
+        self.agent_servers = []
+        self.monitor_server = None
+
+        # Stats tracking for the whole server
+        #####
+        self.server_start = datetime.datetime.utcnow()
+        # shares
+        self.shares = StatManager()
+        self.reject_low = StatManager()
+        self.reject_dup = StatManager()
+        self.reject_stale = StatManager()
+        # connections
+        self.stratum_connects = StatManager()
+        self.stratum_disconnects = StatManager()
+        self.agent_connects = StatManager()
+        self.agent_disconnects = StatManager()
+
+    def run(self):
         # Start the main chain network monitor and aux chain monitors
         logger.info("Network monitor starting up")
-        network = MonitorNetwork(stratum_clients, net_state, config,
-                                 server_state, celery)
+        network = MonitorNetwork(self)
         # start each aux chain monitor for merged mining
-        for coin in config['merged']:
+        for coin in self.config['merged']:
             if not coin['enabled']:
                 logger.info("Skipping aux chain support because it's disabled")
                 continue
 
             logger.info("Aux network monitor for {} starting up"
                         .format(coin['name']))
-            aux_network = MonitorAuxChain(server_state, net_state, config,
-                                          network, **coin)
+            aux_network = MonitorAuxChain(self, **coin)
             aux_network.start()
-            self.greenlets.append(aux_network)
+            self.greenlets.append(("{} Aux network monitor".format(coin['name']), aux_network))
+            self.auxmons.append(aux_network)
 
-        nodes = Greenlet(monitor_nodes, config, net_state)
-        nodes.start()
         network.start()
-        self.greenlets.append(nodes)
-        self.greenlets.append(network)
+        self.greenlets.append(("Main network monitor", network))
+        self.netmon = network
 
         # start the stratum stream server
-        logger.info("Stratum Server starting up")
-        sserver = StratumServer(
-            (config['stratum']['address'], config['stratum']['port']),
-            stratum_clients,
-            config,
-            net_state,
-            server_state,
-            celery,
-            spawn=Pool())
-        sserver.start()
-        self.servers.append(sserver)
+        ######
+        # allow the user to specify the address in two formats for reverse
+        # compatibility. One form specifies an address and port at root
+        # level of the configuration, while the other way gives a list
+        # of dictionaries on the "binds" key
+        for cfg in self.config['stratum'].get('binds', [dict(address=self.config['agent']['address'],
+                                                        port=self.config['agent']['port'])]):
+            logger.info("Stratum server starting up on {address}:{port}"
+                        .format(**cfg))
+            sserver = StratumServer(
+                (self.config['stratum']['address'], self.config['stratum']['port']),
+                self,
+                spawn=Pool())
+            sserver.start()
+            self.servers.append(("Stratum server {address}:{port}".format(**cfg), sserver))
+            self.stratum_servers.append(sserver)
 
         logger.info("Stat manager starting up")
         # a simple greenlet that rotates some of the servers stats
-        rotater = StatRotater(server_state, celery)
+        rotater = StatMonitor(self)
         self.greenlets.append(("Stats rotater", rotater))
 
         # the agent server. allows peers to connect and send stat data about
         # a stratum worker
-        if config['agent']['enabled']:
-            agent_thread = threading.Thread(target=agent_runner, args=(
-                config, stratum_clients, agent_clients, server_state, celery,
-                exit_event))
-            agent_thread.daemon = True
-            threads.append(agent_thread)
-            agent_thread.start()
+        if self.config['agent']['enabled']:
+            # allow the user to specify the address in two formats for reverse
+            # compatibility. One form specifies an address and port at root
+            # level of the configuration, while the other way gives a list
+            # of dictionaries on the "binds" key
+            for cfg in self.config['agent'].get('binds', [dict(address=self.config['agent']['address'],
+                                                          port=self.config['agent']['port'])]):
+                logger.info("Agent server starting up on {address}:{port}"
+                            .format(**cfg))
+                sserver = AgentServer((cfg['address'], cfg['port']), self)
+                sserver.start()
+                self.servers.append(("Agent server {address}:{port}".format(**cfg), sserver))
+                self.agent_servers.append(sserver)
 
         # the monitor server. a simple flask http server that lets you view
         # internal data structures to monitor server health
-        if config['monitor']['enabled']:
-            monitor_thread = threading.Thread(target=monitor_runner, args=(
-                net_state, config, stratum_clients, server_state, agent_clients,
-                exit_event))
-            monitor_thread.daemon = True
-            threads.append(monitor_thread)
-            monitor_thread.start()
+        if self.config['monitor']['enabled']:
+            # Logic for setting up the HTTP monitor
+            logger.info("HTTP statistics server starting up")
+            monitor_app.config.update(self.config['monitor'])
+            monitor_app.config.update(dict(server=self, config=self.config))
+            monitor_server = WSGIServer((self.config['monitor']['address'],
+                                         self.config['monitor']['port']),
+                                        monitor_app)
+            monitor_server.start()
+            self.servers.append(("HTTP statistics server", monitor_server))
+            self.monitor_server = monitor_server
+
+        gevent.signal(signal.SIGINT, self.exit, "SIGINT")
+        gevent.signal(signal.SIGHUP, self.exit, "SIGHUP")
+
+        self._exit_signal = Event()
+        self._exit_signal.wait()
+
+        # stop all stream servers
+        for name, server in self.servers:
+            logger.info("Requesting stop for {}".format(name))
+            spawn(server.stop, timeout=self.config['term_timeout'])
+
+        # stop all greenlets
+        for name, gl in self.greenlets:
+            logger.info("Requesting stop for {} greenlet".format(name))
+            gl.kill(timeout=self.config['term_timeout'], block=False)
 
         try:
-            while True:
-                for thread in threads:
-                    thread.join(0.2)
+            if gevent.wait(timeout=self.config['term_timeout']):
+                logger.info("All threads exited normally")
+            else:
+                logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
-            logger.info("Exiting requested via SIGINT, cleaning up...")
-            # stop all stream servers
-            for name, server in self.servers:
-                logger.info("Requesting stop for {} server".format(name))
-                spawn(server.stop, timeout=config['term_timeout'])
+            logger.info("Shutdown requested again by system, "
+                        "exiting without cleanup")
 
-            # stop all greenlets
-            for name, gl in self.greenlet:
-                logger.info("Requesting stop for {} greenlet".format(name))
-                gl.kill(timeout=config['term_timeout'], block=False)
+        logger.info("=" * 80)
 
-            try:
-                while True:
-                    # restart the loop if any of the greenlets or servers are
-                    # still running
-                    for name, gl in self.greenlet:
-                        if not gl.ready():
-                            continue
-
-                    for name, gl in self.greenlet:
-                        if not gl.ready():
-                            continue
-            except KeyboardInterrupt:
-                logger.info("Shutdown requested again by system, "
-                            "exiting without cleanup")
-
-            logger.info("Timeout reached, shutting down forcefully")
-            logger.info("=" * 80)
+    def exit(self, signal=None):
+        logger.info("*" * 80)
+        logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
+                    .format(signal, self.config['term_timeout']))
+        self._exit_signal.set()
