@@ -88,6 +88,9 @@ celery_task_prefix: simplecoin.tasks
 # The name of the powerpool process on the system. Useful for quickly
 # identifying pid with grep and ps
 #procname: powerpool
+# The amount of time the client will group shares into before transmitting to
+# clients
+#share_batch_interval: 90
 
 # aliases allow you to automatically translate a friendly username to to a
 # predefined address. the donate address is similar, except that any invalid

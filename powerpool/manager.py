@@ -18,6 +18,7 @@ import logging
 from celery import Celery
 from pprint import pformat
 
+from .reporter import CeleryReporter
 from .netmon import MonitorNetwork, MonitorAuxChain
 from .stratum_server import StratumServer
 from .agent_server import AgentServer
@@ -69,6 +70,7 @@ def main():
                            'interval': 400,
                            'spm_target': 2.5,
                            'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
+                  share_batch_interval=90,
                   celery={'CELERY_DEFAULT_QUEUE': 'celery'},
                   push_job_interval=30,
                   celery_task_prefix=None)
@@ -157,42 +159,6 @@ def main():
     server.run()
 
 
-class StratumClients(dict):
-    """ A simple class that wraps and manages some lookup tables for quickly
-    finding stratum clients based on address or (address, worker) tuples. Also
-    houses data structure holding all client references. """
-    def __init__(self, *args, **kwargs):
-        dict.__init__(self, *args, **kwargs)
-        self.addr_worker_lut = {}
-        self.address_lut = {}
-
-    def set_user(self, client):
-        # setup lookup table for easier access from other read sources
-        user_worker = (client.address, client.worker)
-        self.addr_worker_lut[user_worker] = self
-        self.address_lut.setdefault(user_worker[0], [])
-        self.address_lut[user_worker[0]].append(self)
-
-    def __delitem__(self, key):
-        """ Manages removing the client from the luts on regular delete """
-        obj = self[key]
-        dict.__delitem__(self, key)
-        # clear the address from the luts
-        try:
-            # remove from lut for address
-            self.address_lut[obj.address].remove(self)
-            # delete the list if its empty
-            if not len(self.address_lut[obj.address]):
-                del self.address_lut[obj.address]
-        except (ValueError, KeyError):
-            pass
-        # clear the worker from the luts
-        try:
-            del self.addr_worker_lut[(obj.address, obj.worker)]
-        except KeyError:
-            pass
-
-
 class PowerPool(object):
     def __init__(self, config):
         self.config = config
@@ -207,16 +173,13 @@ class PowerPool(object):
         self.celery = Celery()
         self.celery.conf.update(config['celery'])
 
-        # monkey patch the celery object to make sending tasks easy
-        def send_task_pp(self, name, *args, **kwargs):
-            self.send_task(config['celery_task_prefix'] + '.' + name, args, kwargs)
-        Celery.send_task_pp = send_task_pp
-
         # Primary systems
         self.stratum_clients = StratumClients()
         self.agent_clients = {}
         # The network monitor object
         self.netmon = None
+        # The module that reports everything to the outside
+        self.reporter = None
         # Aux network monitors (merged mining)
         self.auxmons = []
 
@@ -240,6 +203,8 @@ class PowerPool(object):
 
     def run(self):
         # Start the main chain network monitor and aux chain monitors
+        self.reporter = CeleryReporter(self)
+
         logger.info("Network monitor starting up")
         network = MonitorNetwork(self)
         self.netmon = network

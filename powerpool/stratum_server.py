@@ -96,7 +96,7 @@ class StratumClient(GenericClient):
         self.config = server.config
         self.netmon = server.netmon
         self.stratum_clients = server.stratum_clients
-        self.celery = server.celery
+        self.reporter = server.reporter
 
         # register client into the client dictionary
         self.sock = sock
@@ -106,7 +106,7 @@ class StratumClient(GenericClient):
         self.authenticated = False
         self.subscribed = False
         self.address = None
-        self.worker = ''
+        self.worker = None
         # the worker id. this is also extranonce 1
         self.id = hexlify(struct.pack('Q', id))
         self.stratum_clients[self.id] = self
@@ -398,7 +398,8 @@ class StratumClient(GenericClient):
                         self.server.aux_state[monitor.name]['recent_blocks'].append(
                             dict(height=new_height, timestamp=int(time())))
                         if monitor.send:
-                            self.logger.info("Submitting {} new block to celery".format(monitor.name))
+                            self.logger.info("Submitting {} new block to reporter"
+                                             .format(monitor.name))
                             try:
                                 hsh = aux_work['merged_proxy'].getblockhash(new_height)
                             except Exception:
@@ -414,8 +415,7 @@ class StratumClient(GenericClient):
                             except Exception:
                                 self.logger.info("", exc_info=True)
                                 amount = -1
-                            self.celery.send_task_pp(
-                                'add_block',
+                            self.reporter.add_block(
                                 self.address,
                                 new_height,
                                 int(amount * 100000000),
@@ -468,8 +468,7 @@ class StratumClient(GenericClient):
                     self.netmon.block_stats['accepts'] += 1
                     self.netmon.recent_blocks.append(
                         dict(height=job.block_height, timestamp=int(time())))
-                    self.celery.send_task_pp(
-                        'add_block',
+                    self.reporter.add_block(
                         self.address,
                         job.block_height,
                         job.total_value,
@@ -548,14 +547,13 @@ class StratumClient(GenericClient):
             valid = 0
             for stamp, shares in chunks.iteritems():
                 valid += shares[0]
-                self.celery.send_task_pp(
-                    'add_one_minute', self.address, shares[0],
-                    stamp, self.worker, *shares[1:])
+                self.reporter.add_one_minute(self.address, shares[0],
+                                             stamp, self.worker, *shares[1:])
                 self.logger.info("Logging one_minute for {}.{}"
                                  .format(self.address, self.worker))
 
             if valid > 0:
-                self.celery.send_task_pp('add_share', self.address, valid)
+                self.reporter.add_share(self.address, valid)
                 self.transmitted_shares += valid
                 self.logger.info("Entering {} shares for {}.{}"
                                  .format(valid, self.address, self.worker))
@@ -568,7 +566,7 @@ class StratumClient(GenericClient):
 
     def log_share(self, outcome, diff):
         """ Handles logging of the share in its proper local counter. These
-        are then aggregated for shipment to celery in one minute chunks. """
+        are then aggregated for shipment to the reporter in one minute chunks. """
         now = int(time())
         self.report_shares()
         key = self.outcome_to_idx[outcome]
