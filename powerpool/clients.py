@@ -1,7 +1,7 @@
 import logging
 
 from time import time
-from gevent import sleep
+from gevent import sleep, Greenlet
 
 from .stratum_server import StratumClient
 from .utils import time_format
@@ -10,7 +10,7 @@ from .utils import time_format
 logger = logging.getLogger('client_manager')
 
 
-class StratumClients(dict):
+class StratumClients(Greenlet):
     """ This class does housekeeping for client lookup mappings and share
     repoting and scheduling. We collect all shares into three different grousp:
 
@@ -25,27 +25,34 @@ class StratumClients(dict):
     """
 
     def __init__(self, server):
-        dict.__init__(self)
+        Greenlet.__init__(self)
         self.server = server
         self.reporter = server.reporter
         self.config = server.config
 
         # lookup tables for finding trackers
+        self._clients = {}
         self.addr_worker_lut = {}
         self.address_lut = {}
+
+    def _run(self):
+        self.report_shares()
 
     def set_user(self, client):
         # Add the client (or create) appropriate worker and address trackers
         user_worker = (client.address, client.worker)
         self.addr_worker_lut.setdefault(
             user_worker, WorkerTracker(self.reporter, client))
+        self.addr_worker_lut[user_worker].clients.append(client)
+
         self.address_lut.setdefault(
             user_worker[0], AddressTracker(self.reporter, client))
+        self.address_lut[user_worker[0]].clients.append(client)
 
     def __delitem__(self, key):
         """ Manages removing the client from the luts on regular delete """
         obj = self[key]
-        dict.__delitem__(self, key)
+        del self._clients[key]
         address, worker = obj.address, obj.worker
 
         # it won't appear in the luts if these values were never set
@@ -57,7 +64,7 @@ class StratumClients(dict):
             # remove from lut for address
             self.address_lut[address].clients.remove(obj)
             # if it's the last client in the object, delete the entry
-            if not len(self.address_lut[address]):
+            if not len(self.address_lut[address].clients):
                 self.address_lut[address].report()
                 del self.address_lut[address]
 
@@ -66,9 +73,15 @@ class StratumClients(dict):
         if key in self.addr_worker_lut:
             self.addr_worker_lut[key].clients.remove(obj)
             # if it's the last client in the object, delete the entry
-            if not len(self.addr_worker_lut[key]):
+            if not len(self.addr_worker_lut[key].clients):
                 self.addr_worker_lut[key].report(flush=True)
                 del self.addr_worker_lut[key]
+
+    def __getitem__(self, key):
+        return self._clients[key]
+
+    def __setitem__(self, key, val):
+        self._clients[key] = val
 
     def add_share(self, address, worker, amount, typ):
         """ Logs a share for a user """
@@ -93,7 +106,7 @@ class StratumClients(dict):
             logger.info("Reporting one minute shares for {:,} address/workers"
                         .format(len(self.addr_worker_lut)))
             t = time()
-            upper = (time.time() // 60) * 60
+            upper = (time() // 60) * 60
             for tracker in self.addr_worker_lut.itervalues():
                 tracker.report(upper=upper)
             logger.info("One minute shares reported (queued) in {}"
@@ -106,12 +119,13 @@ class WorkerTracker(object):
     def __init__(self, reporter, client):
         self.reporter = reporter
         self.slices = {}
-        self.clients = [client]
+        self.clients = []
         self.address, self.worker = client.address, client.worker
 
-    def count_share(self, amount, time, typ):
-        self.slices.setdefault(time, [0, 0, 0, 0])
-        self.slices[time] += amount
+    def count_share(self, amount, typ):
+        t = (time() // 60) * 60
+        self.slices.setdefault(t, [0, 0, 0, 0])
+        self.slices[t][typ] += amount
 
     def report(self, flush=False, upper=None):
         # only report minutes that are complete unless we're flushing
@@ -119,7 +133,7 @@ class WorkerTracker(object):
             upper = (time() // 60) * 60
         if flush:
             upper += 120
-        for stamp in self.slices:
+        for stamp in self.slices.keys():
             if stamp < upper:
                 acc, dup, low, stale = self.slices[stamp]
                 self.reporter.add_one_minute(self.address, acc, stamp,
@@ -141,7 +155,7 @@ class AddressTracker(object):
         # Clear it before running a block call that might context switch...
         val = self.unreported
         self.unreported = 0
-        self.reporter.add_share(self.address, val)
+        self.reporter.add_shares(self.address, val)
 
     def count_share(self, amount):
         t = (time() // 60) * 60
