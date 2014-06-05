@@ -100,7 +100,7 @@ class StratumManager(object):
                 self.agent_servers.append(serv)
                 serv.start()
 
-            serv = StratumServer(server, **cfg)
+            serv = StratumServer(server, self, **cfg)
             self.stratum_servers.append(serv)
             serv.start()
 
@@ -111,8 +111,8 @@ class StratumManager(object):
     def set_user(self, client):
         # Add the client (or create) appropriate worker and address trackers
         user_worker = (client.address, client.worker)
-        self.addr_worker_lut.setdefault(user_worker, [])
-        self.addr_worker_lut[user_worker].append(client)
+        self.address_worker_lut.setdefault(user_worker, [])
+        self.address_worker_lut[user_worker].append(client)
 
         self.address_lut.setdefault(user_worker[0], [])
         self.address_lut[user_worker[0]].append(client)
@@ -136,11 +136,11 @@ class StratumManager(object):
 
         # wipe the client from the address/worker tracker
         key = (address, worker)
-        if key in self.addr_worker_lut:
-            self.addr_worker_lut[key].remove(client)
+        if key in self.address_worker_lut:
+            self.address_worker_lut[key].remove(client)
             # if it's the last client in the object, delete the entry
-            if not len(self.addr_worker_lut[key]):
-                del self.addr_worker_lut[key]
+            if not len(self.address_worker_lut[key]):
+                del self.address_worker_lut[key]
 
 
 class ArgumentParserError(Exception):
@@ -163,11 +163,12 @@ class StratumServer(GenericServer):
                            vardiff=True, port=3333)
         self.config.update(config)
 
-    def __init__(self, server, **config):
+    def __init__(self, server, stratum_manager, **config):
         self._set_config(**config)
         listener = (self.config['address'], self.config['port'])
         super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server
+        self.stratum_manager = stratum_manager
         self.id_count = 0
         self.logger = server.register_logger('stratum_server_{}'.
                                              format(self.config['port']))
@@ -222,6 +223,7 @@ class StratumClient(GenericClient):
         # global items
         self.server = server
         self.config = stratum_server.config
+        self.manager_config = stratum_server.stratum_manager.config
         self.jobmanager = server.jobmanager
         self.reporter = server.reporter
         self.stratum_manager = server.stratum_manager
@@ -667,7 +669,7 @@ class StratumClient(GenericClient):
         user_worker = self.convert_username(username)
         # unpack into state dictionary
         self.address, self.worker = user_worker
-        self.client_manager.set_user(self)
+        self.stratum_manager.set_user(self)
         self.authenticated = True
         self.send_success(self.msg_id)
         self.push_difficulty()
@@ -702,7 +704,7 @@ class StratumClient(GenericClient):
                  ("mining.notify",
                   self.subscr_notify)),
                 self.id,
-                self.config['extranonce_size']),
+                self.jobmanager.config['extranonce_size']),
                'error': None,
                'id': self.msg_id}
         self.subscribed = True
@@ -715,7 +717,7 @@ class StratumClient(GenericClient):
                 self.logger.debug("Read loop encountered flag from write, exiting")
                 break
 
-            line = with_timeout(self.config['push_job_interval'] - self.time_seed,
+            line = with_timeout(self.manager_config['push_job_interval'] - self.time_seed,
                                 self.fp.readline,
                                 timeout_value='timeout')
 
@@ -773,8 +775,7 @@ class StratumClient(GenericClient):
                         self.accepted_shares += diff
 
                     # log the share results for aggregation and transmission
-                    self.client_manager.log_share(self.address, self.worker,
-                                                  diff, outcome)
+                    self.reporter.log_share(self.address, self.worker, diff, outcome)
 
                     # don't recalc their diff more often than interval
                     if (self.config['vardiff']['enabled'] and

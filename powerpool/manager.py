@@ -141,11 +141,11 @@ class PowerPool(object):
         self._exit_signal.wait()
 
         # stop all stream servers
-        for name, server in self.servers:
+        for server in self.servers:
             spawn(server.stop, timeout=self.term_timeout)
 
         # stop all greenlets
-        for name, gl in self.greenlets:
+        for gl in self.greenlets:
             gl.kill(timeout=self.term_timeout, block=False)
 
         try:

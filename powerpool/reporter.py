@@ -1,7 +1,7 @@
 import logging
 import time
 
-from gevent import Greenlet, sleep
+from gevent import Greenlet, sleep, spawn
 from gevent.queue import Queue
 from celery import Celery
 
@@ -38,7 +38,8 @@ class CeleryReporter(Greenlet):
     def _set_config(self, **config):
         self.config = dict(celery_task_prefix=None,
                            celery={'CELERY_DEFAULT_QUEUE': 'celery'},
-                           share_batch_interval=60)
+                           share_batch_interval=60,
+                           tracker_expiry_time=180)
         self.config.update(config)
 
         # check that we have at least one configured coin server
@@ -54,7 +55,11 @@ class CeleryReporter(Greenlet):
         self.celery = Celery()
         self.celery.conf.update(self.config['celery'])
 
+        self.share_reporter = None
+
         self.queue = Queue()
+        self.addresses = {}
+        self.workers = {}
 
     # Remote methods to send information to other servers
     ########################
@@ -79,7 +84,7 @@ class CeleryReporter(Greenlet):
                     .format("transmit_block", args))
 
     def _run(self):
-        self.report_shares()
+        self.share_reporter = spawn(self.report_shares)
         while True:
             name, args, kwargs = self.queue.peek()
             try:
@@ -96,8 +101,11 @@ class CeleryReporter(Greenlet):
             logger.info("Reporting shares for {:,} users"
                         .format(len(self.address_lut)))
             t = time.time()
-            for tracker in self.address_lut.itervalues():
+            for address, tracker in self.addresses.itervalues():
                 tracker.report()
+                # if the last log time was more than expiry time ago...
+                if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                    del self.addresses[address]
             logger.info("Shares reported (queued) in {}"
                         .format(time_format(time.time() - t)))
 
@@ -105,38 +113,49 @@ class CeleryReporter(Greenlet):
                         .format(len(self.addr_worker_lut)))
             t = time.time()
             upper = (t // 60) * 60
-            for tracker in self.addr_worker_lut.itervalues():
+            for worker_addr, tracker in self.workers.iteritems():
                 tracker.report(upper=upper)
+                # if the last log time was more than expiry time ago...
+                if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                    del self.workers[worker_addr]
             logger.info("One minute shares reported (queued) in {}"
                         .format(time_format(time.time() - t)))
 
     def log_share(self, address, worker, amount, typ):
         """ Logs a share for a user """
         # collecting for reporting to the website for display in graphs
-        self.addr_worker_lut[(address, worker)].count_share(amount, typ)
+        addr_worker = (address, worker)
+        if addr_worker not in self.workers:
+            self.workers[addr_worker] = WorkerTracker(self, address, worker)
+        self.workers[(address, worker)].count_share(amount, typ)
         # reporting for payout share logging and vardiff rates
         if typ == StratumClient.VALID_SHARE:
+            if address not in self.addresses:
+                self.addresses[address] = AddressTracker(self, address)
             # for tracking vardiff speeds
-            self.address_lut[address].count_share(amount)
+            self.addresses[address].count_share(amount)
 
     def kill(self, *args, **kwargs):
         logger.info("Shutting down CeleryReporter..")
+        self.share_reporter.kill(*args, **kwargs)
         Greenlet.kill(self, *args, **kwargs)
 
 
 class WorkerTracker(object):
     """ Records stats about a worker and tracks all associated stratum
     connections. """
-    def __init__(self, reporter, client):
+    def __init__(self, reporter, address, worker):
         self.reporter = reporter
         self.slices = {}
-        self.clients = []
-        self.address, self.worker = client.address, client.worker
+        self.address, self.worker = address, worker
+        self.last_log = None
 
     def count_share(self, amount, typ):
-        t = (time() // 60) * 60
+        curr = time()
+        t = (curr // 60) * 60
         self.slices.setdefault(t, [0, 0, 0, 0])
         self.slices[t][typ] += amount
+        self.last_log = curr
 
     def report(self, flush=False, upper=None):
         # only report minutes that are complete unless we're flushing
@@ -155,12 +174,12 @@ class WorkerTracker(object):
 class AddressTracker(object):
     """ Records stats about an address and tracks all associated stratum
     connections. """
-    def __init__(self, reporter, client):
+    def __init__(self, reporter, address):
         self.reporter = reporter
         self.unreported = 0
         self.minutes = {}
-        self.clients = []
-        self.address = client.address
+        self.address = address
+        self.last_log = None
 
     def report(self):
         # Clear it before running a block call that might context switch...
@@ -169,10 +188,12 @@ class AddressTracker(object):
         self.reporter.add_share(self.address, val)
 
     def count_share(self, amount):
-        t = (int(time()) // 60) * 60
+        curr = time()
+        t = (int(curr) // 60) * 60
         self.minutes.setdefault(t, 0)
         self.minutes[t] += amount
         self.unreported += amount
+        self.last_log = curr
 
     @property
     def spm(self):
