@@ -34,29 +34,35 @@ class StratumManager(object):
                            push_job_interval=30,
                            agent=dict(enabled=False))
         self.config.update(config)
-        self.logger = logging.getLogger('stratum_manager')
+        self.algos = {}
 
-        # setup the pow function
-        """
-        if config['pow_func'] == 'ltc_scrypt':
-            from cryptokit.block import scrypt_int
-            config['pow_func'] = scrypt_int
-        elif config['pow_func'] == 'vert_scrypt':
-            from cryptokit.block import vert_scrypt_int
-            config['pow_func'] = vert_scrypt_int
-        elif config['pow_func'] == 'darkcoin':
-            from cryptokit.block import drk_hash_int
-            config['pow_func'] = drk_hash_int
-        elif config['pow_func'] == 'sha256':
-            from cryptokit.block import sha256_int
-            config['pow_func'] = sha256_int
+        try:
+            from drk_hash import getPoWHash
+        except ImportError:
+            pass
         else:
-            self.logger.error("pow_func option not valid!")
-            exit()
-        """
+            self.logger.info("Enabling x11 hashing algorithm module")
+            self.algos['x11'] = getPoWHash
+
+        try:
+            from ltc_scrypt import getPoWHash
+        except ImportError:
+            pass
+        else:
+            self.logger.info("Enabling scrypt hashing algorithm module")
+            self.algos['scypt'] = getPoWHash
+
+        try:
+            from vtc_scrypt import getPoWHash
+        except ImportError:
+            pass
+        else:
+            self.logger.info("Enabling scrypt-n hashing algorithm module")
+            self.algos['scyptn'] = getPoWHash
 
     def __init__(self, server, **config):
         self.server = server
+        self.logger = server.register_logger('stratum_manager')
         self._set_config(**config)
 
         # A dictionary of all connected clients indexed by id
@@ -111,11 +117,10 @@ class StratumManager(object):
         self.address_lut.setdefault(user_worker[0], [])
         self.address_lut[user_worker[0]].append(client)
 
-    def remove_client(self, id):
+    def remove_client(self, client):
         """ Manages removing the StratumClient from the luts """
-        obj = self[id]
-        del self.clients[id]
-        address, worker = obj.address, obj.worker
+        del self.clients[client.id]
+        address, worker = client.address, client.worker
 
         # it won't appear in the luts if these values were never set
         if address is None and worker is None:
@@ -124,18 +129,17 @@ class StratumManager(object):
         # wipe the client from the address tracker
         if address in self.address_lut:
             # remove from lut for address
-            self.address_lut[address].clients.remove(obj)
+            self.address_lut[address].remove(client)
             # if it's the last client in the object, delete the entry
-            if not len(self.address_lut[address].clients):
-                self.address_lut[address].report()
+            if not len(self.address_lut[address]):
                 del self.address_lut[address]
 
         # wipe the client from the address/worker tracker
         key = (address, worker)
         if key in self.addr_worker_lut:
-            self.addr_worker_lut[key].clients.remove(obj)
+            self.addr_worker_lut[key].remove(client)
             # if it's the last client in the object, delete the entry
-            if not len(self.addr_worker_lut[key].clients):
+            if not len(self.addr_worker_lut[key]):
                 del self.addr_worker_lut[key]
 
 
@@ -165,7 +169,8 @@ class StratumServer(GenericServer):
         super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server
         self.id_count = 0
-        self.logger = logging.getLogger('stratum_server')
+        self.logger = server.register_logger('stratum_server_{}'.
+                                             format(self.config['port']))
 
     def start(self, *args, **kwargs):
         self.logger.info("Stratum server starting up on {address}:{port}"
@@ -180,12 +185,10 @@ class StratumServer(GenericServer):
     def handle(self, sock, address):
         self.id_count += 1
         self.server.stratum_connects.incr()
-        StratumClient(sock, address, self.id_count, self.server, start_difficulty=self.start_difficulty)
+        StratumClient(sock, address, self.id_count, self.server, self)
 
 
 class StratumClient(GenericClient):
-    logger = logging.getLogger('stratum_server')
-
     errors = {20: 'Other/Unknown',
               21: 'Job not found (=stale)',
               22: 'Duplicate share',
@@ -204,7 +207,8 @@ class StratumClient(GenericClient):
     LOW_DIFF = 2
     STALE_FOUND = 3
 
-    def __init__(self, sock, address, id, server):
+    def __init__(self, sock, address, id, server, stratum_server):
+        self.logger = stratum_server.logger
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
                          .format(address, sock))
 
@@ -217,10 +221,10 @@ class StratumClient(GenericClient):
 
         # global items
         self.server = server
-        self.config = server.config
+        self.config = stratum_server.config
         self.jobmanager = server.jobmanager
-        self.client_manager = server.client_manager
         self.reporter = server.reporter
+        self.stratum_manager = server.stratum_manager
 
         # register client into the client dictionary
         self.sock = sock
@@ -233,7 +237,6 @@ class StratumClient(GenericClient):
         self.worker = None
         # the worker id. this is also extranonce 1
         self.id = hexlify(struct.pack('Q', id))
-        self.client_manager[self.id] = self
         # subscription id for difficulty on stratum
         self.subscr_difficulty = None
         # subscription id for work notif on stratum
@@ -275,6 +278,7 @@ class StratumClient(GenericClient):
         self.fp = None
 
         try:
+            self.stratum_manager.set_conn(self)
             self.peer_name = sock.getpeername()
             self.fp = sock.makefile()
             write_greenlet = spawn(self.write_loop)
@@ -287,6 +291,7 @@ class StratumClient(GenericClient):
             if write_greenlet:
                 write_greenlet.kill()
 
+            # handle clean disconnection from client
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
             except socket.error:
@@ -297,8 +302,9 @@ class StratumClient(GenericClient):
                 self.sock.close()
             except (socket.error, AttributeError):
                 pass
+
             self.server.stratum_disconnects.incr()
-            del self.client_manager[self.id]
+            self.stratum_manager.remove_client(self)
 
             self.logger.info("Closing connection for client {}".format(self.id))
 

@@ -1,4 +1,3 @@
-import logging
 import bitcoinrpc
 import struct
 import urllib3
@@ -17,8 +16,6 @@ from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep, Greenlet, spawn
 from copy import copy
 
-logger = logging.getLogger('netmon')
-
 
 class MonitorNetwork(Greenlet):
     def _set_config(self, **kwargs):
@@ -32,26 +29,27 @@ class MonitorNetwork(Greenlet):
 
         if (not get_bcaddress_version(self.config['pool_address']) or
                 not get_bcaddress_version(self.config['donate_address'])):
-            logger.error("No valid donation/pool address configured! Exiting.")
+            self.logger.error("No valid donation/pool address configured! Exiting.")
             exit()
 
         # check that we have at least one configured coin server
         if not self.config['main_coinservs']:
-            logger.error("Shit won't work without a coinserver to connect to")
+            self.logger.error("Shit won't work without a coinserver to connect to")
             exit()
 
     def __init__(self, server, **config):
         Greenlet.__init__(self)
         self._set_config(**config)
+        self.logger = server.register_logger('jobmanager')
 
         # start each aux chain monitor for merged mining
         for coin in self.config['merged']:
             if not coin['enabled']:
-                logger.info("Skipping aux chain support because it's disabled")
+                self.logger.info("Skipping aux chain support because it's disabled")
                 continue
 
-            logger.info("Aux network monitor for {} starting up"
-                        .format(coin['name']))
+            self.logger.info("Aux network monitor for {} starting up"
+                             .format(coin['name']))
             aux_network = MonitorAuxChain(self, **coin)
             aux_network.start()
             self.greenlets.append(("{} Aux network monitor".format(coin['name']), aux_network))
@@ -104,8 +102,8 @@ class MonitorNetwork(Greenlet):
         try:
             getattr(self.coinserv, command)(*args, **kwargs)
         except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
-            logger.warn("Unable to perform {} on RPC server. Got: {}"
-                        .format(command, e))
+            self.logger.warn("Unable to perform {} on RPC server. Got: {}"
+                             .format(command, e))
             self.down_connection(self._poll_connection)
             raise RPCException(e)
 
@@ -122,14 +120,14 @@ class MonitorNetwork(Greenlet):
                                             key=lambda x: x.config['poll_priority'])
             except ValueError:
                 self._poll_connection = None
-                logger.error("No RPC connections available for polling!!!")
+                self.logger.error("No RPC connections available for polling!!!")
             else:
-                logger.warn("RPC connection {} switching to poll_connection "
-                            "after {} went down!"
-                            .format(self._poll_connection.name, conn.name))
+                self.logger.warn("RPC connection {} switching to poll_connection "
+                                 "after {} went down!"
+                                 .format(self._poll_connection.name, conn.name))
 
         if conn not in self._down_connections:
-            logger.info("Server at {} now reporting down".format(conn.name))
+            self.logger.info("Server at {} now reporting down".format(conn.name))
             self._down_connections.append(conn)
 
     def _monitor_nodes(self):
@@ -139,25 +137,25 @@ class MonitorNetwork(Greenlet):
                 try:
                     conn.getinfo()
                 except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException):
-                    logger.info("RPC connection {} still down!".format(conn.name))
+                    self.logger.info("RPC connection {} still down!".format(conn.name))
                     continue
 
                 self.live_connections.append(conn)
                 remlist.append(conn)
-                logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
+                self.logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
 
                 # if this connection has a higher priority than current
                 if self._poll_connection is not None:
                     curr_poll = self._poll_connection.config['poll_priority']
                     if conn.config['poll_priority'] > curr_poll:
-                        logger.info("RPC connection {} has higher poll priority than "
-                                    "current poll connection, switching..."
-                                    .format(conn.name))
+                        self.logger.info("RPC connection {} has higher poll priority than "
+                                         "current poll connection, switching..."
+                                         .format(conn.name))
                         self._poll_connection = conn
                 else:
                     self._poll_connection = conn
-                    logger.info("RPC connection {} defaulting poll connection"
-                                .format(conn.name))
+                    self.logger.info("RPC connection {} defaulting poll connection"
+                                     .format(conn.name))
 
             for conn in remlist:
                 self._down_connections.remove(conn)
@@ -167,7 +165,7 @@ class MonitorNetwork(Greenlet):
     def kill(self, *args, **kwargs):
         """ Override our default kill method and kill our child greenlets as
         well """
-        logger.info("Network monitoring jobmanager shutting down...")
+        self.logger.info("Network monitoring jobmanager shutting down...")
         self._node_monitor.kill(*args, **kwargs)
         # stop all greenlets
         for name, gl in self.auxmons:
@@ -175,20 +173,20 @@ class MonitorNetwork(Greenlet):
         Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
-        logger.info("Network monitoring jobmanager starting up...")
+        self.logger.info("Network monitoring jobmanager starting up...")
         # start watching our nodes to see if they're up or not
         self._node_monitor = spawn(self._monitor_nodes)
         i = 0
         while True:
             try:
                 if self._poll_connection is None:
-                    logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+                    self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
                     sleep(1)
                     continue
 
                 # if there's a new block registered
                 if self.check_height():
-                    logger.info("New block on main network detected")
+                    self.logger.info("New block on main network detected")
                     # dump the current transaction pool, refresh and push the
                     # event
                     self.getblocktemplate(new_block=True)
@@ -199,7 +197,7 @@ class MonitorNetwork(Greenlet):
                         self.getblocktemplate()
                     i += 1
             except Exception:
-                logger.error("Unhandled exception!", exc_info=True)
+                self.logger.error("Unhandled exception!", exc_info=True)
                 pass
 
             sleep(self.config['block_poll'])
@@ -209,7 +207,7 @@ class MonitorNetwork(Greenlet):
         try:
             height = self._poll_connection.getblockcount()
         except Exception:
-            logger.warn("Unable to communicate with server that thinks it's live.")
+            self.logger.warn("Unable to communicate with server that thinks it's live.")
             self.down_connection(self._poll_connection)
             return False
 
@@ -235,7 +233,7 @@ class MonitorNetwork(Greenlet):
                     'prevblock',
                 ]})
         except Exception as e:
-            logger.warn("Failed to fetch new job. Reason: {}".format(e))
+            self.logger.warn("Failed to fetch new job. Reason: {}".format(e))
             self._down_connection(self._poll_connection)
             return False
 
@@ -290,10 +288,10 @@ class MonitorNetwork(Greenlet):
         coinbase.outputs.append(
             Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
-        logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}."
-                    .format(len(self._last_gbt['transactions']),
-                            bits_to_difficulty(self._last_gbt['bits']),
-                            self._last_gbt['coinbasevalue']))
+        self.logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}."
+                         .format(len(self._last_gbt['transactions']),
+                                 bits_to_difficulty(self._last_gbt['bits']),
+                                 self._last_gbt['coinbasevalue']))
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
                                         coinbase,
                                         extranonce_length,
@@ -308,11 +306,11 @@ class MonitorNetwork(Greenlet):
 
         if push:
             if flush:
-                logger.info("New work announced! Wiping previous jobs...")
+                self.logger.info("New work announced! Wiping previous jobs...")
                 self.jobs.clear()
                 self.latest_job = None
             else:
-                logger.info("New work announced!")
+                self.logger.info("New work announced!")
 
         self._job_counter += 1
         self.jobs[job_id] = bt_obj
@@ -343,6 +341,8 @@ class MonitorAuxChain(Greenlet):
         self.server = server
         self.config = server.config
         self.__dict__.update(kwargs)
+        self.logger = server.register_self.logger('auxmonitor_{}'
+                                                  .format(self.name))
         self.state = {'difficulty': None,
                       'height': None,
                       'chain_id': None,
@@ -371,18 +371,18 @@ class MonitorAuxChain(Greenlet):
         try:
             getattr(self.coinserv, command)(*args, **kwargs)
         except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
-            logger.warn("Unable to perform {} on RPC server. Got: {}"
-                        .format(command, e))
+            self.logger.warn("Unable to perform {} on RPC server. Got: {}"
+                             .format(command, e))
             raise RPCException(e)
 
     def update(self, reason=None):
         if reason:
-            logger.info("Updating {} aux work from a signal recieved!"
-                        .format(self.name))
+            self.logger.info("Updating {} aux work from a signal recieved!"
+                             .format(self.name))
 
         # cheap hack to prevent a race condition...
         if self.netmon._poll_connection is None:
-            logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+            self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
             sleep(1)
             return False
 
@@ -392,7 +392,7 @@ class MonitorAuxChain(Greenlet):
             sleep(2)
             return False
 
-        #logger.debug("Aux RPC returned: {}".format(auxblock))
+        #self.logger.debug("Aux RPC returned: {}".format(auxblock))
         new_merged_work = dict(
             hash=int(auxblock['hash'], 16),
             target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
@@ -406,9 +406,9 @@ class MonitorAuxChain(Greenlet):
             except RPCException:
                 sleep(2)
                 return False
-            logger.info("New aux work announced! Diff {}. RPC returned: {}"
-                        .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
-                                new_merged_work))
+            self.logger.info("New aux work announced! Diff {}. RPC returned: {}"
+                             .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
+                                     new_merged_work))
             self.netmon.merged_work[auxblock['chainid']] = new_merged_work
             self.state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
             # only push the job if there's a new block height discovered.
@@ -423,12 +423,12 @@ class MonitorAuxChain(Greenlet):
     def kill(self, *args, **kwargs):
         """ Override our default kill method and kill our child greenlets as
         well """
-        logger.info("Auxilury network monitor for {} shutting down..."
+        self.logger.info("Auxilury network monitor for {} shutting down..."
                          .format(self.name))
         Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
-        logger.info("Auxilury network monitor for {} starting up..."
+        self.logger.info("Auxilury network monitor for {} starting up..."
                          .format(self.name))
         while True:
             if not self.update():

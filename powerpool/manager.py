@@ -20,9 +20,6 @@ from .monitor import MonitorWSGI
 from .utils import import_helper
 
 
-logger = logging.getLogger('manager')
-
-
 def main():
     parser = argparse.ArgumentParser(description='Run powerpool!')
     parser.add_argument('config', type=argparse.FileType('r'),
@@ -42,23 +39,23 @@ class PowerPool(object):
         if not loggers:
             loggers = [{'type': 'StreamHandler', 'level': 'DEBUG'}]
 
+        self.log_handlers = []
+
+        # setup all our log handlers
         for log_cfg in loggers:
-            ch = getattr(logging, log_cfg['type'])()
+            handler = getattr(logging, log_cfg['type'])()
             log_level = getattr(logging, log_cfg['level'].upper())
-            ch.setLevel(log_level)
+            handler.setLevel(log_level)
             fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
             formatter = logging.Formatter(fmt)
-            ch.setFormatter(formatter)
-            keys = log_cfg.get('listen', ['stats', 'stratum_server', 'netmon',
-                                          'manager', 'monitor', 'agent', 'reporter'])
-            for key in keys:
-                log = logging.getLogger(key)
-                log.addHandler(ch)
-                log.setLevel(log_level)
+            handler.setFormatter(formatter)
+            self.log_handlers.append((log_cfg.get('listen'), handler))
 
-        logger.info("=" * 80)
-        logger.info("PowerPool stratum server ({}) starting up...".format(procname))
-        logger.debug(pformat(raw_config))
+        self.logger = self.register_logger('manager')
+
+        self.logger.info("=" * 80)
+        self.logger.info("PowerPool stratum server ({}) starting up...".format(procname))
+        self.logger.debug(pformat(raw_config))
 
         setproctitle.setproctitle(procname)
         self.term_timeout = term_timeout
@@ -95,9 +92,19 @@ class PowerPool(object):
         self.agent_connects = StatManager()
         self.agent_disconnects = StatManager()
 
+    def register_logger(self, name):
+        logger = logging.getLogger(name)
+        for keys, handler in self.log_handlers:
+            if not keys or name in keys:
+                logger.addHandler(handler)
+                # handlers will manage level, so just propogate everything
+                logger.setLevel(logging.DEBUG)
+
+        return logger
+
     def run(self):
         # Start the main chain network monitor and aux chain monitors
-        logger.info("Reporter engine starting up")
+        self.logger.info("Reporter engine starting up")
         cls = import_helper(self.raw_config['reporter']['type'])
         self.reporter = cls(self, **self.raw_config['reporter'])
         self.reporter.start()
@@ -110,7 +117,7 @@ class PowerPool(object):
         self.servers.extend(self.stratum_manager.agent_servers)
 
         # Network monitor is in charge of job generation...
-        logger.info("Network monitor starting up")
+        self.logger.info("Network monitor starting up")
         cls = import_helper(self.raw_config['jobmanager']['type'])
         self.jobmanager = cls(self, **self.raw_config['jobmanager'])
         self.jobmanager.start()
@@ -143,34 +150,34 @@ class PowerPool(object):
 
         try:
             if gevent.wait(timeout=self.term_timeout):
-                logger.info("All threads exited normally")
+                self.logger.info("All threads exited normally")
             else:
-                logger.info("Timeout reached, shutting down forcefully")
+                self.logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
-            logger.info("Shutdown requested again by system, "
+            self.logger.info("Shutdown requested again by system, "
                         "exiting without cleanup")
 
-        logger.info("=" * 80)
+        self.logger.info("=" * 80)
 
     def exit(self, signal=None):
-        logger.info("*" * 80)
-        logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
-                    .format(signal, self.term_timeout))
+        self.logger.info("*" * 80)
+        self.logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
+                         .format(signal, self.term_timeout))
         self._exit_signal.set()
 
     def tick_stats(self):
         try:
-            logger.info("Stat rotater starting up")
+            self.logger.info("Stat rotater starting up")
             last_tick = int(time.time())
             last_send = (int(time.time()) // 60) * 60
             while True:
                 now = time.time()
                 # time to rotate minutes?
                 if now > (last_send + 60):
-                    shares = self.server_state['shares'].tock()
-                    reject_low = self.server_state['reject_low'].tock()
-                    reject_dup = self.server_state['reject_dup'].tock()
-                    reject_stale = self.server_state['reject_stale'].tock()
+                    shares = self.shares.tock()
+                    reject_low = self.reject_low.tock()
+                    reject_dup = self.reject_dup.tock()
+                    reject_stale = self.reject_stale.tock()
                     self.stratum_connects.tock()
                     self.stratum_disconnects.tock()
                     self.agent_connects.tock()
@@ -196,7 +203,7 @@ class PowerPool(object):
 
                 sleep(0.1)
         except gevent.GreenletExit:
-            logger.info("Stat manager exiting...")
+            self.logger.info("Stat manager exiting...")
 
 
 class StatManager(object):
