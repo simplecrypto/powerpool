@@ -5,6 +5,7 @@ import urllib3
 import gevent
 import signal
 
+from cryptokit.base58 import get_bcaddress_version
 from future.utils import viewitems
 from binascii import unhexlify, hexlify
 from collections import deque
@@ -20,20 +21,53 @@ logger = logging.getLogger('netmon')
 
 
 class MonitorNetwork(Greenlet):
-    def __init__(self, server):
+    def _set_config(self, **kwargs):
+        # A fast way to set defaults for the kwargs then set them as attributes
+        self.config = dict(coinserv=None, extranonce_serv_size=8,
+                           extranonce_size=4, diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
+                           merged=None, block_poll=0.2, job_generate_int=75,
+                           rpc_ping_int=2, pow_func='ltc_scrypt', pool_address=None,
+                           donate_address=None)
+        self.config.update(kwargs)
+
+        if (not get_bcaddress_version(self.config['pool_address']) or
+                not get_bcaddress_version(self.config['donate_address'])):
+            logger.error("No valid donation/pool address configured! Exiting.")
+            exit()
+
+        # check that we have at least one configured coin server
+        if not self.config['main_coinservs']:
+            logger.error("Shit won't work without a coinserver to connect to")
+            exit()
+
+    def __init__(self, server, **config):
         Greenlet.__init__(self)
+        self._set_config(**config)
+
+        # start each aux chain monitor for merged mining
+        for coin in self.config['merged']:
+            if not coin['enabled']:
+                logger.info("Skipping aux chain support because it's disabled")
+                continue
+
+            logger.info("Aux network monitor for {} starting up"
+                        .format(coin['name']))
+            aux_network = MonitorAuxChain(self, **coin)
+            aux_network.start()
+            self.greenlets.append(("{} Aux network monitor".format(coin['name']), aux_network))
+            self.auxmons.append(aux_network)
+
         # convenient access to global objects
-        self.stratum_clients = server.stratum_clients
-        self.config = server.config
+        self.stratum_manager = server.stratum_manager
         self.server = server
-        self.celery = server.celery
-        self.aux_managers = []
+
+        # Aux network monitors (merged mining)
+        self.auxmons = []
 
         # internal vars
         self._last_gbt = None
         self._poll_connection = None
         self._down_connections = []
-        self._live_connections = []
         self._job_counter = 0
         self._last_aux_update = dict()
         self._node_monitor = None
@@ -54,7 +88,7 @@ class MonitorNetwork(Greenlet):
                                 last_solve_worker=None)
         self.recent_blocks = deque(maxlen=15)
 
-        for serv in self.config['coinserv']:
+        for serv in self.config['main_coinservs']:
             conn = bitcoinrpc.AuthServiceProxy(
                 "http://{0}:{1}@{2}:{3}/"
                 .format(serv['username'],
@@ -78,13 +112,13 @@ class MonitorNetwork(Greenlet):
     def down_connection(self, conn):
         """ Called when a connection goes down. Removes if from the list of
         live connections and recomputes a new. """
-        if conn in self._live_connections:
-            self._live_connections.remove(conn)
+        if conn in self.live_connections:
+            self.live_connections.remove(conn)
 
         if self._poll_connection is conn:
             # find the next best poll connection
             try:
-                self._poll_connection = min(self._live_connections,
+                self._poll_connection = min(self.live_connections,
                                             key=lambda x: x.config['poll_priority'])
             except ValueError:
                 self._poll_connection = None
@@ -108,7 +142,7 @@ class MonitorNetwork(Greenlet):
                     logger.info("RPC connection {} still down!".format(conn.name))
                     continue
 
-                self._live_connections.append(conn)
+                self.live_connections.append(conn)
                 remlist.append(conn)
                 logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
 
@@ -133,10 +167,15 @@ class MonitorNetwork(Greenlet):
     def kill(self, *args, **kwargs):
         """ Override our default kill method and kill our child greenlets as
         well """
+        logger.info("Network monitoring jobmanager shutting down...")
         self._node_monitor.kill(*args, **kwargs)
+        # stop all greenlets
+        for name, gl in self.auxmons:
+            gl.kill(timeout=self.config['term_timeout'], block=False)
         Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
+        logger.info("Network monitoring jobmanager starting up...")
         # start watching our nodes to see if they're up or not
         self._node_monitor = spawn(self._monitor_nodes)
         i = 0
@@ -279,7 +318,7 @@ class MonitorNetwork(Greenlet):
         self.jobs[job_id] = bt_obj
         self.latest_job = job_id
         if push:
-            for idx, client in viewitems(self.stratum_clients):
+            for idx, client in viewitems(self.stratum_manager.clients):
                 try:
                     if flush:
                         client.new_block_event.set()
@@ -291,11 +330,6 @@ class MonitorNetwork(Greenlet):
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
             self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
-            if self.config['send_new_block']:
-                self.celery.send_task_pp('new_block',
-                                         bt_obj.block_height,
-                                         hex_bits,
-                                         bt_obj.total_value)
 
 
 class RPCException(Exception):
@@ -386,7 +420,16 @@ class MonitorAuxChain(Greenlet):
                 self.monitor_network.generate_job()
                 self.state['new_jobs'] += 1
 
+    def kill(self, *args, **kwargs):
+        """ Override our default kill method and kill our child greenlets as
+        well """
+        logger.info("Auxilury network monitor for {} shutting down..."
+                         .format(self.name))
+        Greenlet.kill(self, *args, **kwargs)
+
     def _run(self):
+        logger.info("Auxilury network monitor for {} starting up..."
+                         .format(self.name))
         while True:
             if not self.update():
                 continue

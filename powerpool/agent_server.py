@@ -4,17 +4,40 @@ import logging
 
 from time import time
 from gevent.queue import Queue
+from gevent.pool import Pool
 from gevent import sleep, with_timeout, spawn
 
 from .server import GenericServer, GenericClient
 
 
 class AgentServer(GenericServer):
+    logger = logging.getLogger('agent_server')
 
-    def __init__(self, listener, server, **kwargs):
-        super(GenericServer, self).__init__(listener, **kwargs)
+    """ The agent server that pairs with a stratum server. """
+    def _set_config(self, **config):
+        self.config = dict(port_diff=1111,
+                           accepted_types=['temp', 'status', 'hashrate', 'thresholds'])
+        self.config.update(config)
+        self.config['address'] = self.stratum_config['address']
+        self.config['port'] = self.config['port_diff']
+
+    def __init__(self, server, stratum_config, **config):
+        self.stratum_config = stratum_config
+        self._set_config(**config)
+        listener = (self.config['address'], self.config['port'])
+        super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server
         self.id_count = 0
+
+    def start(self, *args, **kwargs):
+        self.logger.info("Agent server starting up on {address}:{port}"
+                         .format(**self.config))
+        GenericServer.start(self, *args, **kwargs)
+
+    def stop(self, *args, **kwargs):
+        self.logger.info("Agent server {address}:{port} stopping"
+                         .format(**self.config))
+        GenericServer.stop(self, *args, **kwargs)
 
     def handle(self, sock, address):
         self.id_count += 1

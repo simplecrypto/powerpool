@@ -1,21 +1,35 @@
-from flask import Flask, jsonify, abort
+from flask import Flask, jsonify, abort, Blueprint, current_app
 from itertools import chain
 from collections import deque
 from cryptokit.block import BlockTemplate
 from cryptokit.transaction import Transaction
+from gevent.wsgi import WSGIServer
 
 from .stats import StatManager
 
 import logging
 import sys
-import psutil
 import datetime
 import resource
 
 
 logger = logging.getLogger('monitor')
-monitor_app = Flask('monitor')
-cpu_times = (None, None)
+main = Blueprint('main', __name__)
+
+
+class MonitorWSGI(WSGIServer):
+    def __init__(self, DEBUG=False, address='127.0.0.1', port=3855, enabled=True, **kwargs):
+        """ Handles implementing default configurations """
+        if not enabled:
+            logger.info("HTTP monitor not enabled, not starting up...")
+            return
+        else:
+            logger.info("HTTP monitor not enabled, not starting up...")
+        monitor_app = Flask('monitor')
+        monitor_app.config.update(kwargs)
+        monitor_app.config['DEBUG'] = debug
+        monitor_app.register_blueprint(main)
+        WSGIServer.__init__(self, (address, port), monitor_app)
 
 
 def jsonize(item):
@@ -53,11 +67,11 @@ def jsonize(item):
             return str(item)
 
 
-@monitor_app.route('/debug')
+@main.route('/debug')
 def debug():
-    if not monitor_app.config['DEBUG']:
+    if not current_app.config['DEBUG']:
         abort(403)
-    server = monitor_app.config['server']
+    server = current_app.config['server']
     return jsonify(server=jsonize(server.__dict__),
                    netmon=jsonize(server.netmon.__dict__),
                    stratum_clients=jsonize(server.stratum_clients),
@@ -66,12 +80,12 @@ def debug():
                    )
 
 
-@monitor_app.route('/')
+@main.route('/')
 def general():
-    net_state = monitor_app.config['net_state']
-    stratum_clients = monitor_app.config['stratum_clients']
-    agent_clients = monitor_app.config['agent_clients']
-    server_state = monitor_app.config['server_state']
+    net_state = current_app.config['net_state']
+    stratum_clients = current_app.config['stratum_clients']
+    agent_clients = current_app.config['agent_clients']
+    server_state = current_app.config['server_state']
 
     share_summary = server_state['shares'].summary()
     share_summary['megahashpersec'] = ((2 ** 16) * share_summary['min_total']) / 1000000 / 60.0
@@ -103,34 +117,34 @@ def general():
                    stratum_connects=server_state['stratum_connects'].summary())
 
 
-@monitor_app.route('/client/<address>')
+@main.route('/client/<address>')
 def client(address=None):
     try:
-        clients = monitor_app.config['stratum_clients']['address_lut'][address]
+        clients = current_app.config['stratum_clients']['address_lut'][address]
     except KeyError:
         abort(404)
 
     return jsonify(**{address: [client.details for client in clients]})
 
 
-@monitor_app.route('/clients')
+@main.route('/clients')
 def clients():
-    lut = monitor_app.config['stratum_clients']['address_lut']
+    lut = current_app.config['stratum_clients']['address_lut']
     clients = {key: [item.summary for item in value]
                for key, value in lut.iteritems()}
 
     return jsonify(clients=clients)
 
 
-@monitor_app.route('/agents')
+@main.route('/agents')
 def agents():
-    agent_clients = monitor_app.config['agent_clients']
+    agent_clients = current_app.config['agent_clients']
     agents = {key: value.summary for key, value in agent_clients.iteritems()}
 
     return jsonify(agents=agents)
 
 
-@monitor_app.route('/memory')
+@main.route('/memory')
 def memory():
     def total_size(o, handlers={}):
         dict_handler = lambda d: chain.from_iterable(d.items())
@@ -160,45 +174,6 @@ def memory():
         return sizeof(o)
 
     keys = ['net_state', 'stratum_clients', 'agent_clients', 'server_state']
-    out = {key: sys.getsizeof(monitor_app.config[key]) for key in keys}
+    out = {key: sys.getsizeof(current_app.config[key]) for key in keys}
     out['total'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return jsonify(**out)
-
-
-@monitor_app.route('/server')
-def server():
-    global cpu_times
-
-    def calculate(t1, t2):
-        t1_all = sum(t1)
-        t1_busy = t1_all - t1.idle
-
-        t2_all = sum(t2)
-        t2_busy = t2_all - t2.idle
-
-        # this usually indicates a float precision issue
-        if t2_busy <= t1_busy:
-            return 0.0
-
-        busy_delta = t2_busy - t1_busy
-        all_delta = t2_all - t1_all
-        busy_perc = (busy_delta / all_delta) * 100
-        return round(busy_perc, 1)
-
-    ret = {}
-    ret.update({"mem_" + key: val for key, val
-                in psutil.virtual_memory().__dict__.iteritems()})
-    ret.update({"cpu_ptime_" + key: val for key, val
-                in psutil.cpu_times_percent().__dict__.iteritems()})
-    if None not in cpu_times:
-        ret['cpu_percent'] = calculate(*cpu_times)
-    else:
-        ret['cpu_percent'] = 0
-    ret.update({"diskio_" + key: val for key, val
-                in psutil.disk_io_counters().__dict__.iteritems()})
-    ret.update({"disk_" + key: val for key, val
-                in psutil.disk_usage('/').__dict__.iteritems()})
-    users = psutil.get_users()
-    ret['user_count'] = len(users)
-    ret['user_info'] = [(u.name, u.host) for u in users]
-    return jsonify(**ret)

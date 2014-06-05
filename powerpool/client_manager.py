@@ -10,7 +10,7 @@ from .utils import time_format
 logger = logging.getLogger('client_manager')
 
 
-class StratumClients(Greenlet):
+class ClientManager(Greenlet):
     """ This class does housekeeping for client lookup mappings and share
     repoting and scheduling. We collect all shares into three different grousp:
 
@@ -31,7 +31,7 @@ class StratumClients(Greenlet):
         self.config = server.config
 
         # lookup tables for finding trackers
-        self._clients = {}
+        self.clients = {}
         self.addr_worker_lut = {}
         self.address_lut = {}
 
@@ -52,7 +52,7 @@ class StratumClients(Greenlet):
     def __delitem__(self, key):
         """ Manages removing the client from the luts on regular delete """
         obj = self[key]
-        del self._clients[key]
+        del self.clients[key]
         address, worker = obj.address, obj.worker
 
         # it won't appear in the luts if these values were never set
@@ -78,12 +78,12 @@ class StratumClients(Greenlet):
                 del self.addr_worker_lut[key]
 
     def __getitem__(self, key):
-        return self._clients[key]
+        return self.clients[key]
 
     def __setitem__(self, key, val):
-        self._clients[key] = val
+        self.clients[key] = val
 
-    def add_share(self, address, worker, amount, typ):
+    def log_share(self, address, worker, amount, typ):
         """ Logs a share for a user """
         # collecting for reporting to the website for display in graphs
         self.addr_worker_lut[(address, worker)].count_share(amount, typ)
@@ -148,22 +148,23 @@ class AddressTracker(object):
         self.reporter = reporter
         self.unreported = 0
         self.minutes = {}
-        self.clients = [client]
+        self.clients = []
         self.address = client.address
 
     def report(self):
         # Clear it before running a block call that might context switch...
         val = self.unreported
         self.unreported = 0
-        self.reporter.add_shares(self.address, val)
+        self.reporter.add_share(self.address, val)
 
     def count_share(self, amount):
-        t = (time() // 60) * 60
+        t = (int(time()) // 60) * 60
         self.minutes.setdefault(t, 0)
         self.minutes[t] += amount
         self.unreported += amount
 
-    def sps(self):
+    @property
+    def spm(self):
         """ Called by the client code to determine how many shares per second
         are currently being submitted. Automatically cleans up the times older
         than 10 minutes. """

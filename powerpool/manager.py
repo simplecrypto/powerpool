@@ -1,29 +1,23 @@
 import yaml
 import argparse
-import collections
 import datetime
 import setproctitle
 import gevent
 import signal
+import time
 
-from cryptokit.base58 import get_bcaddress_version
-from collections import deque
-from gevent import spawn
+from gevent import spawn, sleep
 from gevent.monkey import patch_all
 from gevent.event import Event
-from gevent.wsgi import WSGIServer
-from gevent.pool import Pool
+from gevent.coros import RLock
 patch_all()
 import logging
-from celery import Celery
+from collections import deque
 from pprint import pformat
 
-from .reporter import CeleryReporter
-from .netmon import MonitorNetwork, MonitorAuxChain
-from .stratum_server import StratumServer
-from .agent_server import AgentServer
-from .stats import StatMonitor, StatManager
-from .monitor import monitor_app
+from .stratum_server import StratumManager
+from .monitor import MonitorWSGI
+from .utils import import_helper
 
 
 logger = logging.getLogger('manager')
@@ -35,133 +29,40 @@ def main():
                         help='yaml configuration file to run with')
     args = parser.parse_args()
 
-    # implement some defaults, these are all explained in the example
-    # configuration file
-    config = dict(stratum={'port': 3333, 'address': '0.0.0.0'},
-                  procname='powerpool',
-                  coinserv=[],
-                  extranonce_serv_size=8,
-                  extranonce_size=4,
-                  diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
-                  loggers=[{'type': 'StreamHandler',
-                            'level': 'DEBUG'}],
-                  start_difficulty=128,
-                  term_timeout=3,
-                  merged=[{'enabled': False,
-                          'work_interval': 1}],
-                  monitor={'DEBUG': False,
-                           'address': '127.0.0.1',
-                           'port': 3855,
-                           'enabled': True},
-                  agent={'address': '0.0.0.0',
-                         'port': 4444,
-                         'timeout': 120,
-                         'enabled': False,
-                         'accepted_types': ['temp', 'status', 'hashrate', 'thresholds']},
-                  pow_func='ltc_scrypt',
-                  aliases={},
-                  block_poll=0.2,
-                  job_generate_int=75,
-                  rpc_ping_int=2,
-                  keep_share=600,
-                  send_new_block=True,
-                  vardiff={'enabled': False,
-                           'historesis': 1.5,
-                           'interval': 400,
-                           'spm_target': 2.5,
-                           'tiers': [8, 16, 32, 64, 96, 128, 192, 256, 512]},
-                  share_batch_interval=90,
-                  celery={'CELERY_DEFAULT_QUEUE': 'celery'},
-                  push_job_interval=30,
-                  celery_task_prefix=None)
     # override those defaults with a loaded yaml config
-    add_config = yaml.load(args.config) or {}
-
-    def update(d, u):
-        """ Simple recursive dictionary update """
-        for k, v in u.iteritems():
-            if isinstance(v, collections.Mapping):
-                r = update(d.get(k, {}), v)
-                d[k] = r
-            else:
-                d[k] = u[k]
-        return d
-    update(config, add_config)
-
-    # Add default values to all merged configs
-    merged_default = {'signal': None,
-                      'work_interval': 1,
-                      'flush': False,
-                      'send': True}
-    for i, cfg in enumerate(config['merged']):
-        dct = merged_default.copy()
-        dct.update(cfg)
-        config['merged'][i] = dct
-        if not dct.get('coinserv'):
-            logger.error("Aux shit won't work without a coinserver to connect to")
-            exit()
-
-    for log_cfg in config['loggers']:
-        ch = getattr(logging, log_cfg['type'])()
-        log_level = getattr(logging, log_cfg['level'].upper())
-        ch.setLevel(log_level)
-        fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
-        formatter = logging.Formatter(fmt)
-        ch.setFormatter(formatter)
-        keys = log_cfg.get('listen', ['stats', 'stratum_server', 'netmon',
-                                      'manager', 'monitor', 'agent'])
-        for key in keys:
-            log = logging.getLogger(key)
-            log.addHandler(ch)
-            log.setLevel(log_level)
-
-    logger.info("=" * 80)
-    logger.info("PowerPool stratum server ({}) starting up..."
-                .format(config['procname']))
-    logger.debug(pformat(config))
-
-    setproctitle.setproctitle(config['procname'])
-
-    # setup the pow function
-    if config['pow_func'] == 'ltc_scrypt':
-        from cryptokit.block import scrypt_int
-        config['pow_func'] = scrypt_int
-    elif config['pow_func'] == 'vert_scrypt':
-        from cryptokit.block import vert_scrypt_int
-        config['pow_func'] = vert_scrypt_int
-    elif config['pow_func'] == 'darkcoin':
-        from cryptokit.block import drk_hash_int
-        config['pow_func'] = drk_hash_int
-    elif config['pow_func'] == 'sha256':
-        from cryptokit.block import sha256_int
-        config['pow_func'] = sha256_int
-    else:
-        logger.error("pow_func option not valid!")
-        exit()
+    raw_config = yaml.load(args.config) or {}
 
     # check that config has a valid address
-    if (not get_bcaddress_version(config['pool_address']) or
-            not get_bcaddress_version(config['donate_address'])):
-        logger.error("No valid donation/pool address configured! Exiting.")
-        exit()
-
-    # check that we have at least one configured coin server
-    if not config['coinserv']:
-        logger.error("Shit won't work without a coinserver to connect to")
-        exit()
-
-    # check that we have at least one configured coin server
-    if not config['celery_task_prefix']:
-        logger.error("You need to specify a celery prefix")
-        exit()
-
-    server = PowerPool(config)
+    server = PowerPool(raw_config, **raw_config['powerpool'])
     server.run()
 
 
 class PowerPool(object):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, raw_config, procname="powerpool", term_timeout=3, loggers=None):
+        if not loggers:
+            loggers = [{'type': 'StreamHandler', 'level': 'DEBUG'}]
+
+        for log_cfg in loggers:
+            ch = getattr(logging, log_cfg['type'])()
+            log_level = getattr(logging, log_cfg['level'].upper())
+            ch.setLevel(log_level)
+            fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
+            formatter = logging.Formatter(fmt)
+            ch.setFormatter(formatter)
+            keys = log_cfg.get('listen', ['stats', 'stratum_server', 'netmon',
+                                          'manager', 'monitor', 'agent', 'reporter'])
+            for key in keys:
+                log = logging.getLogger(key)
+                log.addHandler(ch)
+                log.setLevel(log_level)
+
+        logger.info("=" * 80)
+        logger.info("PowerPool stratum server ({}) starting up...".format(procname))
+        logger.debug(pformat(raw_config))
+
+        setproctitle.setproctitle(procname)
+        self.term_timeout = term_timeout
+        self.raw_config = raw_config
 
         # bookkeeping for things to request exit from at exit time
         # A list of all the greenlets that are running
@@ -169,19 +70,12 @@ class PowerPool(object):
         # A list of all the StreamServers
         self.servers = []
 
-        # setup our celery agent and monkey patch
-        self.celery = Celery()
-        self.celery.conf.update(config['celery'])
-
         # Primary systems
-        self.stratum_clients = StratumClients()
-        self.agent_clients = {}
+        self.stratum_manager = None
         # The network monitor object
-        self.netmon = None
+        self.jobmanager = None
         # The module that reports everything to the outside
         self.reporter = None
-        # Aux network monitors (merged mining)
-        self.auxmons = []
 
         self.stratum_servers = []
         self.agent_servers = []
@@ -203,79 +97,35 @@ class PowerPool(object):
 
     def run(self):
         # Start the main chain network monitor and aux chain monitors
-        self.reporter = CeleryReporter(self)
+        logger.info("Reporter engine starting up")
+        cls = import_helper(self.raw_config['reporter']['type'])
+        self.reporter = cls(self, **self.raw_config['reporter'])
+        self.reporter.start()
+        self.greenlets.append(self.reporter)
 
+        # main stratum server manager, not actually a greenelt but starts
+        # several servers and manages data structures
+        self.stratum_manager = StratumManager(self, **self.raw_config.get('stratum', {}))
+        self.servers.extend(self.stratum_manager.stratum_servers)
+        self.servers.extend(self.stratum_manager.agent_servers)
+
+        # Network monitor is in charge of job generation...
         logger.info("Network monitor starting up")
-        network = MonitorNetwork(self)
-        self.netmon = network
-        # start each aux chain monitor for merged mining
-        for coin in self.config['merged']:
-            if not coin['enabled']:
-                logger.info("Skipping aux chain support because it's disabled")
-                continue
+        cls = import_helper(self.raw_config['jobmanager']['type'])
+        self.jobmanager = cls(self, **self.raw_config['jobmanager'])
+        self.jobmanager.start()
+        self.greenlets.append(self.jobmanager)
 
-            logger.info("Aux network monitor for {} starting up"
-                        .format(coin['name']))
-            aux_network = MonitorAuxChain(self, **coin)
-            aux_network.start()
-            self.greenlets.append(("{} Aux network monitor".format(coin['name']), aux_network))
-            self.auxmons.append(aux_network)
-
-        network.start()
-        self.greenlets.append(("Main network monitor", network))
-
-        # start the stratum stream server
-        ######
-        # allow the user to specify the address in two formats for reverse
-        # compatibility. One form specifies an address and port at root
-        # level of the configuration, while the other way gives a list
-        # of dictionaries on the "binds" key
-        for cfg in self.config['stratum'].get('binds', [dict(address=self.config['agent']['address'],
-                                                        port=self.config['agent']['port'])]):
-            logger.info("Stratum server starting up on {address}:{port}"
-                        .format(**cfg))
-            sserver = StratumServer(
-                (self.config['stratum']['address'], self.config['stratum']['port']),
-                self,
-                spawn=Pool())
-            sserver.start()
-            self.servers.append(("Stratum server {address}:{port}".format(**cfg), sserver))
-            self.stratum_servers.append(sserver)
-
-        logger.info("Stat manager starting up")
         # a simple greenlet that rotates some of the servers stats
-        rotater = StatMonitor(self)
-        self.greenlets.append(("Stats rotater", rotater))
-
-        # the agent server. allows peers to connect and send stat data about
-        # a stratum worker
-        if self.config['agent']['enabled']:
-            # allow the user to specify the address in two formats for reverse
-            # compatibility. One form specifies an address and port at root
-            # level of the configuration, while the other way gives a list
-            # of dictionaries on the "binds" key
-            for cfg in self.config['agent'].get('binds', [dict(address=self.config['agent']['address'],
-                                                          port=self.config['agent']['port'])]):
-                logger.info("Agent server starting up on {address}:{port}"
-                            .format(**cfg))
-                sserver = AgentServer((cfg['address'], cfg['port']), self)
-                sserver.start()
-                self.servers.append(("Agent server {address}:{port}".format(**cfg), sserver))
-                self.agent_servers.append(sserver)
+        self.stat_rotater = spawn(self.tick_stats)
+        self.greenlets.append(self.stat_rotater)
 
         # the monitor server. a simple flask http server that lets you view
         # internal data structures to monitor server health
-        if self.config['monitor']['enabled']:
-            # Logic for setting up the HTTP monitor
-            logger.info("HTTP statistics server starting up")
-            monitor_app.config.update(self.config['monitor'])
-            monitor_app.config.update(dict(server=self, config=self.config))
-            monitor_server = WSGIServer((self.config['monitor']['address'],
-                                         self.config['monitor']['port']),
-                                        monitor_app)
-            monitor_server.start()
-            self.servers.append(("HTTP statistics server", monitor_server))
-            self.monitor_server = monitor_server
+        self.monitor_server = MonitorWSGI(**self.raw_config.get('monitor', {}))
+        if self.monitor_server:
+            self.monitor_server.start()
+            self.servers.append(self.monitor_server)
 
         gevent.signal(signal.SIGINT, self.exit, "SIGINT")
         gevent.signal(signal.SIGHUP, self.exit, "SIGHUP")
@@ -285,16 +135,14 @@ class PowerPool(object):
 
         # stop all stream servers
         for name, server in self.servers:
-            logger.info("Requesting stop for {}".format(name))
-            spawn(server.stop, timeout=self.config['term_timeout'])
+            spawn(server.stop, timeout=self.term_timeout)
 
         # stop all greenlets
         for name, gl in self.greenlets:
-            logger.info("Requesting stop for {} greenlet".format(name))
-            gl.kill(timeout=self.config['term_timeout'], block=False)
+            gl.kill(timeout=self.term_timeout, block=False)
 
         try:
-            if gevent.wait(timeout=self.config['term_timeout']):
+            if gevent.wait(timeout=self.term_timeout):
                 logger.info("All threads exited normally")
             else:
                 logger.info("Timeout reached, shutting down forcefully")
@@ -307,5 +155,101 @@ class PowerPool(object):
     def exit(self, signal=None):
         logger.info("*" * 80)
         logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
-                    .format(signal, self.config['term_timeout']))
+                    .format(signal, self.term_timeout))
         self._exit_signal.set()
+
+    def tick_stats(self):
+        try:
+            logger.info("Stat rotater starting up")
+            last_tick = int(time.time())
+            last_send = (int(time.time()) // 60) * 60
+            while True:
+                now = time.time()
+                # time to rotate minutes?
+                if now > (last_send + 60):
+                    shares = self.server_state['shares'].tock()
+                    reject_low = self.server_state['reject_low'].tock()
+                    reject_dup = self.server_state['reject_dup'].tock()
+                    reject_stale = self.server_state['reject_stale'].tock()
+                    self.stratum_connects.tock()
+                    self.stratum_disconnects.tock()
+                    self.agent_connects.tock()
+                    self.agent_disconnects.tock()
+
+                    if shares or reject_dup or reject_low or reject_stale:
+                        self.reporter.add_one_minute(
+                            'pool', shares, now, '', reject_dup,
+                            reject_low, reject_stale)
+                    last_send += 60
+
+                # time to tick?
+                if now > (last_tick + 1):
+                    self.shares.tick()
+                    self.reject_low.tick()
+                    self.reject_dup.tick()
+                    self.reject_stale.tick()
+                    self.stratum_connects.tick()
+                    self.stratum_disconnects.tick()
+                    self.agent_connects.tick()
+                    self.agent_disconnects.tick()
+                    last_tick += 1
+
+                sleep(0.1)
+        except gevent.GreenletExit:
+            logger.info("Stat manager exiting...")
+
+
+class StatManager(object):
+    def __init__(self):
+        self._val = 0
+        self.mins = deque([], 60)
+        self.seconds = deque([], 60)
+        self.lock = RLock()
+        self.total = 0
+
+    def incr(self, amount=1):
+        """ Increments the counter """
+        with self.lock:
+            self._val += amount
+    __add__ = incr
+
+    def tick(self):
+        """ should be called once every second """
+        val = self.reset()
+        self.seconds.append(val)
+        self.total += val
+
+    def tock(self):
+        # rotate the total into a minute slot
+        last_min = sum(self.seconds)
+        self.mins.append(last_min)
+        return last_min
+
+    @property
+    def hour(self):
+        return sum(self.mins)
+
+    @property
+    def minute(self):
+        return sum(self.seconds)
+
+    @property
+    def second_avg(self):
+        return sum(self.seconds) / 60.0
+
+    @property
+    def min_avg(self):
+        return sum(self.mins) / 60.0
+
+    def summary(self):
+        return dict(total=self.total,
+                    min_total=self.minute,
+                    hour_total=self.hour,
+                    min_avg=self.min_avg)
+
+    def reset(self):
+        """ Locks the counter, resets the value, then returns the value """
+        with self.lock:
+            curr = self._val
+            self._val = 0
+            return curr
