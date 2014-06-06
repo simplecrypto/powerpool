@@ -142,7 +142,9 @@ class PowerPool(object):
 
         # stop all stream servers
         for server in self.servers:
-            spawn(server.stop, timeout=self.term_timeout)
+            # timeout is actually the time we wait before killing the greenlet,
+            # so don't bother waiting, no cleanup is needed from our servers
+            spawn(server.stop, timeout=0)
 
         # stop all greenlets
         for gl in self.greenlets:
@@ -152,6 +154,15 @@ class PowerPool(object):
             if gevent.wait(timeout=self.term_timeout):
                 self.logger.info("All threads exited normally")
             else:
+                from greenlet import greenlet
+                import gc
+                import traceback
+                for ob in gc.get_objects():
+                    if not isinstance(ob, greenlet):
+                        continue
+                    if not ob:
+                        continue
+                    self.logger.error(''.join(traceback.format_stack(ob.gr_frame)))
                 self.logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
             self.logger.info("Shutdown requested again by system, "

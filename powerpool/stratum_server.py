@@ -4,11 +4,11 @@ import logging
 import argparse
 import struct
 import random
+import time
 
-from time import time
 from binascii import hexlify, unhexlify
 from bitcoinrpc import CoinRPCException
-from cryptokit import target_from_diff
+from cryptokit import target_from_diff, uint256_from_str
 from cryptokit.bitcoin import data as bitcoin_data
 from cryptokit.util import pack
 from hashlib import sha256
@@ -35,6 +35,7 @@ class StratumManager(object):
                            agent=dict(enabled=False))
         self.config.update(config)
         self.algos = {}
+        self.id_count = 0
 
         try:
             from drk_hash import getPoWHash
@@ -50,7 +51,7 @@ class StratumManager(object):
             pass
         else:
             self.logger.info("Enabling scrypt hashing algorithm module")
-            self.algos['scypt'] = getPoWHash
+            self.algos['scrypt'] = getPoWHash
 
         try:
             from vtc_scrypt import getPoWHash
@@ -58,7 +59,7 @@ class StratumManager(object):
             pass
         else:
             self.logger.info("Enabling scrypt-n hashing algorithm module")
-            self.algos['scyptn'] = getPoWHash
+            self.algos['scryptn'] = getPoWHash
 
     def __init__(self, server, **config):
         self.server = server
@@ -169,7 +170,6 @@ class StratumServer(GenericServer):
         super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server
         self.stratum_manager = stratum_manager
-        self.id_count = 0
         self.logger = server.register_logger('stratum_server_{}'.
                                              format(self.config['port']))
 
@@ -184,9 +184,9 @@ class StratumServer(GenericServer):
         GenericServer.stop(self, *args, **kwargs)
 
     def handle(self, sock, address):
-        self.id_count += 1
         self.server.stratum_connects.incr()
-        StratumClient(sock, address, self.id_count, self.server, self)
+        self.stratum_manager.id_count += 1
+        StratumClient(sock, address, self.stratum_manager.id_count, self.server, self)
 
 
 class StratumClient(GenericClient):
@@ -206,7 +206,7 @@ class StratumClient(GenericClient):
     VALID_SHARE = 0
     DUP_SHARE = 1
     LOW_DIFF = 2
-    STALE_FOUND = 3
+    STALE_SHARE = 3
 
     def __init__(self, sock, address, id, server, stratum_server):
         self.logger = stratum_server.logger
@@ -224,6 +224,7 @@ class StratumClient(GenericClient):
         self.server = server
         self.config = stratum_server.config
         self.manager_config = stratum_server.stratum_manager.config
+        self.algos = stratum_server.stratum_manager.algos
         self.jobmanager = server.jobmanager
         self.reporter = server.reporter
         self.stratum_manager = server.stratum_manager
@@ -258,12 +259,12 @@ class StratumClient(GenericClient):
         self.job_mapper = {}
         # last time we sent graphing data to the server
         self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
-        self.last_graph_transmit = time() - self.time_seed
-        self.last_diff_adj = time() - self.time_seed
+        self.last_graph_transmit = time.time() - self.time_seed
+        self.last_diff_adj = time.time() - self.time_seed
         self.difficulty = self.config['start_difficulty']
         # the next diff to be used by push job
         self.next_diff = self.config['start_difficulty']
-        self.connection_time = int(time())
+        self.connection_time = int(time.time())
         self.msg_id = None
 
         # trigger to send a new block notice to a user
@@ -471,8 +472,8 @@ class StratumClient(GenericClient):
             self.server.reject_dup.incr(difficulty)
             return self.DUP_SHARE, difficulty
 
-        job_target = target_from_diff(difficulty, self.config['diff1'])
-        hash_int = self.config['pow_func'](header)
+        job_target = target_from_diff(difficulty, job.diff1)
+        hash_int = uint256_from_str(self.algos[job.algo](header))
         if hash_int >= job_target:
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
@@ -524,10 +525,10 @@ class StratumClient(GenericClient):
 
                     if res is True:
                         self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(monitor.name))
-                        self.server.aux_state[monitor.name]['block_solve'] = int(time())
+                        self.server.aux_state[monitor.name]['block_solve'] = int(time.time())
                         self.server.aux_state[monitor.name]['accepts'] += 1
                         self.server.aux_state[monitor.name]['recent_blocks'].append(
-                            dict(height=new_height, timestamp=int(time())))
+                            dict(height=new_height, timestamp=int(time.time())))
                         if monitor.send:
                             self.logger.info("Submitting {} new block to reporter"
                                              .format(monitor.name))
@@ -598,7 +599,7 @@ class StratumClient(GenericClient):
                 if res is None:
                     self.jobmanager.block_stats['accepts'] += 1
                     self.jobmanager.recent_blocks.append(
-                        dict(height=job.block_height, timestamp=int(time())))
+                        dict(height=job.block_height, timestamp=int(time.time())))
                     self.reporter.add_block(
                         self.address,
                         job.block_height,
@@ -608,7 +609,7 @@ class StratumClient(GenericClient):
                         hash_hex)
                     self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
                                      .format(conn.name))
-                    self.jobmanager.block_solve = int(time())
+                    self.jobmanager.block_solve = int(time.time())
                     break  # break retry loop if success
                 else:
                     self.logger.error(
@@ -678,12 +679,16 @@ class StratumClient(GenericClient):
     def recalc_vardiff(self):
         # ideal difficulty is the n1 shares they solved divided by target
         # shares per minute
-        spm_tar = self.config['vardiff']['spm_target']
-        ideal_diff = self.client_manager.address_lut[self.address].spm / spm_tar
-        self.logger.info("VARDIFF: Calculated client {} ideal diff {}"
-                         .format(self.id, ideal_diff))
+        spm_tar = self.manager_config['vardiff']['spm_target']
+        tracker = self.reporter.addresses.get(self.address)
+        if not tracker:
+            self.logger.debug("VARDIFF: No address tracker, must be no valid shares for this user")
+            return
+        ideal_diff = tracker.spm / spm_tar
+        self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
+                          .format(self.id, ideal_diff))
         # find the closest tier for them
-        new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+        new_diff = min(self.manager_config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
         if new_diff != self.difficulty:
             self.logger.info(
@@ -693,7 +698,7 @@ class StratumClient(GenericClient):
             self.logger.debug("VARDIFF: Not adjusting difficulty, already "
                               "close enough")
 
-        self.last_diff_adj = time()
+        self.last_diff_adj = time.time()
 
     def subscribe(self, data):
         self.subscr_notify = sha1(urandom(4)).hexdigest()
@@ -724,7 +729,7 @@ class StratumClient(GenericClient):
             # push a new job every timeout seconds if requested
             if line == 'timeout':
                 if self.authenticated is True:
-                    if self.config['vardiff']['enabled']:
+                    if self.config['vardiff']:
                         self.recalc_vardiff()
                     self.logger.info("Pushing new job to client {}.{} after timeout"
                                      .format(self.address, self.worker))
@@ -778,8 +783,8 @@ class StratumClient(GenericClient):
                     self.reporter.log_share(self.address, self.worker, diff, outcome)
 
                     # don't recalc their diff more often than interval
-                    if (self.config['vardiff']['enabled'] and
-                            (time.time() - self.last_diff_adj) > self.config['vardiff']['interval']):
+                    if (self.config['vardiff'] and
+                            (time.time() - self.last_diff_adj) > self.manager_config['vardiff']['interval']):
                         self.recalc_vardiff()
                 else:
                     self.logger.warn("Unkown action for command {}"

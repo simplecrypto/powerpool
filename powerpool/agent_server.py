@@ -11,19 +11,19 @@ from .server import GenericServer, GenericClient
 
 
 class AgentServer(GenericServer):
-    logger = logging.getLogger('agent_server')
-
     """ The agent server that pairs with a stratum server. """
     def _set_config(self, **config):
         self.config = dict(port_diff=1111,
                            accepted_types=['temp', 'status', 'hashrate', 'thresholds'])
         self.config.update(config)
         self.config['address'] = self.stratum_config['address']
-        self.config['port'] = self.config['port_diff']
+        self.config['port'] = self.config['port_diff'] + self.stratum_config['port']
 
     def __init__(self, server, stratum_config, **config):
         self.stratum_config = stratum_config
         self._set_config(**config)
+        self.logger = server.register_logger('stratum_server_{}'.
+                                             format(self.config['port']))
         listener = (self.config['address'], self.config['port'])
         super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server

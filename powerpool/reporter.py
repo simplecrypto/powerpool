@@ -9,9 +9,6 @@ from .utils import time_format
 from .stratum_server import StratumClient
 
 
-logger = logging.getLogger('reporter')
-
-
 class NoopReporter(Greenlet):
     """ An example of main methods and argument patters... """
     def __init__(self, server):
@@ -50,6 +47,7 @@ class CeleryReporter(Greenlet):
     def __init__(self, server, **config):
         Greenlet.__init__(self)
         self._set_config(**config)
+        self.logger = server.register_logger('reporter')
 
         # setup our celery agent and monkey patch
         self.celery = Celery()
@@ -65,22 +63,22 @@ class CeleryReporter(Greenlet):
     ########################
     def add_one_minute(self, *args):
         self.queue.put(("add_one_minute", args, {}))
-        logger.info("Calling celery task {} with {}"
+        self.logger.info("Calling celery task {} with {}"
                     .format("add_one_minute", args))
 
     def add_share(self, *args):
         self.queue.put(("add_share", args, {}))
-        logger.info("Calling celery task {} with {}"
+        self.logger.info("Calling celery task {} with {}"
                     .format("add_shares", args))
 
     def agent_send(self, *args):
         self.queue.put(("agent_send", args, {}))
-        logger.info("Calling celery task {} with {}"
+        self.logger.info("Calling celery task {} with {}"
                     .format("agent_send", args))
 
     def add_block(self, *args):
         self.queue.put(("add_block", args, {}))
-        logger.info("Calling celery task {} with {}"
+        self.logger.info("Calling celery task {} with {}"
                     .format("transmit_block", args))
 
     def _run(self):
@@ -91,26 +89,26 @@ class CeleryReporter(Greenlet):
                 self.celery.send_task(
                     self.config['celery_task_prefix'] + '.' + name, args, kwargs)
             except Exception:
-                logger.error("Unable to communicate with celery broker!")
+                self.logger.error("Unable to communicate with celery broker!")
             else:
                 self.queue.get()
 
     def report_shares(self):
         while True:
             sleep(self.config['share_batch_interval'])
-            logger.info("Reporting shares for {:,} users"
-                        .format(len(self.address_lut)))
+            self.logger.info("Reporting shares for {:,} users"
+                        .format(len(self.addresses)))
             t = time.time()
-            for address, tracker in self.addresses.itervalues():
+            for address, tracker in self.addresses.iteritems():
                 tracker.report()
                 # if the last log time was more than expiry time ago...
                 if (tracker.last_log + self.config['tracker_expiry_time']) < t:
                     del self.addresses[address]
-            logger.info("Shares reported (queued) in {}"
+            self.logger.info("Shares reported (queued) in {}"
                         .format(time_format(time.time() - t)))
 
-            logger.info("Reporting one minute shares for {:,} address/workers"
-                        .format(len(self.addr_worker_lut)))
+            self.logger.info("Reporting one minute shares for {:,} address/workers"
+                        .format(len(self.workers)))
             t = time.time()
             upper = (t // 60) * 60
             for worker_addr, tracker in self.workers.iteritems():
@@ -118,7 +116,7 @@ class CeleryReporter(Greenlet):
                 # if the last log time was more than expiry time ago...
                 if (tracker.last_log + self.config['tracker_expiry_time']) < t:
                     del self.workers[worker_addr]
-            logger.info("One minute shares reported (queued) in {}"
+            self.logger.info("One minute shares reported (queued) in {}"
                         .format(time_format(time.time() - t)))
 
     def log_share(self, address, worker, amount, typ):
@@ -136,7 +134,7 @@ class CeleryReporter(Greenlet):
             self.addresses[address].count_share(amount)
 
     def kill(self, *args, **kwargs):
-        logger.info("Shutting down CeleryReporter..")
+        self.logger.info("Shutting down CeleryReporter..")
         self.share_reporter.kill(*args, **kwargs)
         Greenlet.kill(self, *args, **kwargs)
 
@@ -151,7 +149,7 @@ class WorkerTracker(object):
         self.last_log = None
 
     def count_share(self, amount, typ):
-        curr = time()
+        curr = time.time()
         t = (curr // 60) * 60
         self.slices.setdefault(t, [0, 0, 0, 0])
         self.slices[t][typ] += amount
@@ -160,7 +158,7 @@ class WorkerTracker(object):
     def report(self, flush=False, upper=None):
         # only report minutes that are complete unless we're flushing
         if not upper:  # allow precomputing upper for batch submission
-            upper = (time() // 60) * 60
+            upper = (time.time() // 60) * 60
         if flush:
             upper += 120
         for stamp in self.slices.keys():
@@ -188,7 +186,7 @@ class AddressTracker(object):
         self.reporter.add_share(self.address, val)
 
     def count_share(self, amount):
-        curr = time()
+        curr = time.time()
         t = (int(curr) // 60) * 60
         self.minutes.setdefault(t, 0)
         self.minutes[t] += amount
@@ -200,7 +198,7 @@ class AddressTracker(object):
         """ Called by the client code to determine how many shares per second
         are currently being submitted. Automatically cleans up the times older
         than 10 minutes. """
-        ten_ago = ((time() // 60) * 60) - 600
+        ten_ago = ((time.time() // 60) * 60) - 600
         mins = 0
         total = 0
         for stamp in self.minutes.keys():

@@ -301,6 +301,8 @@ class MonitorNetwork(Greenlet):
         hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
         bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
         bt_obj.job_id = job_id
+        bt_obj.diff1 = self.config['diff1']
+        bt_obj.algo = self.config['algo']
         bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
 
