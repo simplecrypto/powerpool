@@ -3,18 +3,19 @@ import struct
 import urllib3
 import gevent
 import signal
+import socket
+import time
 
-from cryptokit.base58 import get_bcaddress_version
 from future.utils import viewitems
 from binascii import unhexlify, hexlify
 from collections import deque
+from cryptokit import bits_to_difficulty
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
-from cryptokit import bits_to_difficulty
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
+from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, Greenlet, spawn
-from copy import copy
 
 
 class MonitorNetwork(Greenlet):
@@ -42,25 +43,13 @@ class MonitorNetwork(Greenlet):
         self._set_config(**config)
         self.logger = server.register_logger('jobmanager')
 
-        # start each aux chain monitor for merged mining
-        for coin in self.config['merged']:
-            if not coin['enabled']:
-                self.logger.info("Skipping aux chain support because it's disabled")
-                continue
-
-            self.logger.info("Aux network monitor for {} starting up"
-                             .format(coin['name']))
-            aux_network = MonitorAuxChain(self, **coin)
-            aux_network.start()
-            self.greenlets.append(("{} Aux network monitor".format(coin['name']), aux_network))
-            self.auxmons.append(aux_network)
-
         # convenient access to global objects
         self.stratum_manager = server.stratum_manager
         self.server = server
+        self.reporter = server.reporter
 
         # Aux network monitors (merged mining)
-        self.auxmons = []
+        self.auxmons = {}
 
         # internal vars
         self._last_gbt = None
@@ -86,6 +75,18 @@ class MonitorNetwork(Greenlet):
                                 last_solve_worker=None)
         self.recent_blocks = deque(maxlen=15)
 
+        # start each aux chain monitor for merged mining
+        for coin in self.config['merged']:
+            if not coin['enabled']:
+                self.logger.info("Skipping aux chain support because it's disabled")
+                continue
+
+            self.logger.info("Aux network monitor for {} starting up"
+                             .format(coin['name']))
+            aux_network = MonitorAuxChain(server, self, **coin)
+            aux_network.start()
+            self.auxmons[coin['name']] = aux_network
+
         for serv in self.config['main_coinservs']:
             conn = bitcoinrpc.AuthServiceProxy(
                 "http://{0}:{1}@{2}:{3}/"
@@ -97,6 +98,88 @@ class MonitorNetwork(Greenlet):
             conn.config = serv
             conn.name = "{}:{}".format(serv['address'], serv['port'])
             self._down_connections.append(conn)
+
+    def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
+        job = self.jobs[job_id]
+        self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
+
+    def found_block(self, address, worker, hash_hex, header, job_id):
+        job = self.jobs[job_id]
+        self.block_stats['solves'] += 1
+        self.block_stats['last_solves_height'] = job.block_height
+        self.block_stats['last_solves_worker'] = "{}.{}".format(address, worker)
+        block = hexlify(job.submit_serial(header))
+
+        def submit_block(conn):
+            retries = 0
+            while retries < 5:
+                retries += 1
+                res = "failed"
+                try:
+                    res = conn.getblocktemplate({'mode': 'submit',
+                                                 'data': block})
+                except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+                    self.logger.info("Block failed to submit to the server {} with submitblock!"
+                                     .format(conn.name))
+                    if getattr(e, 'error', {}).get('code', 0) != -8:
+                        self.logger.error(getattr(e, 'error'), exc_info=True)
+                    try:
+                        res = conn.submitblock(block)
+                    except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+                        self.logger.error("Block failed to submit to the server {}!"
+                                          .format(conn.name), exc_info=True)
+                        self.logger.error(getattr(e, 'error'))
+
+                if res is None:
+                    self.block_stats['accepts'] += 1
+                    self.recent_blocks.append(
+                        dict(height=job.block_height, timestamp=int(time.time())))
+                    self.reporter.add_block(
+                        address,
+                        job.block_height,
+                        job.total_value,
+                        job.fee_total,
+                        hexlify(job.bits),
+                        hash_hex,
+                        worker=worker)
+                    self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
+                                     .format(conn.name))
+                    self.block_stats['last_solve_time'] = int(time.time())
+                    break  # break retry loop if success
+                else:
+                    self.logger.error(
+                        "Block failed to submit to the server {}, "
+                        "server returned {}!".format(conn.name, res),
+                        exc_info=True)
+                sleep(1)
+                self.logger.info("Retry {} for connection {}".format(retries, conn.name))
+            else:
+                self.block_stats['rejects'] += 1
+
+        tries = 0
+        while tries < 200:
+            if not self.live_connections:
+                tries += 1
+                self.logger.error("No live connections to submit new block to!"
+                                  " Retry {} / 200.".format(tries))
+                sleep(0.1)
+                continue
+
+            for conn in self.live_connections:
+                # spawn a new greenlet for each submission to do them all async.
+                # lower orphan chance
+                spawn(submit_block, conn)
+
+            break
+
+        self.logger.log(35, "Valid network block identified!")
+        self.logger.info("New block at height {} with hash {} and subsidy {}"
+                         .format(self.jobmanager.current_net['height'],
+                                 job.total_value, hash_hex))
+        self.logger.debug("New block hex dump:\n{}".format(block))
+        self.logger.info("Coinbase: {}".format(str(job.coinbase.to_dict())))
+        for trans in job.transactions:
+            self.logger.debug(str(trans.to_dict()))
 
     def call_rpc(self, command, *args, **kwargs):
         try:
@@ -168,8 +251,8 @@ class MonitorNetwork(Greenlet):
         self.logger.info("Network monitoring jobmanager shutting down...")
         self._node_monitor.kill(*args, **kwargs)
         # stop all greenlets
-        for name, gl in self.auxmons:
-            gl.kill(timeout=self.config['term_timeout'], block=False)
+        for gl in self.auxmons.itervalues():
+            gl.kill(timeout=kwargs.get('timeout'), block=False)
         Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
@@ -218,7 +301,7 @@ class MonitorNetwork(Greenlet):
 
     def getblocktemplate(self, new_block=False, signal=False):
         if signal:
-            print "Generating new job from signal!"
+            self.logger.info("Generating new job from signal!")
         dirty = False
         try:
             # request local memory pool and load it in
@@ -243,6 +326,11 @@ class MonitorNetwork(Greenlet):
             dirty = True
 
         if new_block or dirty:
+            self.logger.info("Generating new block template with {} trans. Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}."
+                             .format(len(self._last_gbt['transactions']),
+                                     bits_to_difficulty(self._last_gbt['bits']),
+                                     self._last_gbt['coinbasevalue'] / 100000000.0,
+                                     self._last_gbt['height']))
             # generate a new job and push it if there's a new block on the
             # network
             self.generate_job(push=new_block, flush=new_block, new_block=new_block)
@@ -266,10 +354,17 @@ class MonitorNetwork(Greenlet):
                 size=size,
                 nonce=0,
             ))
-            mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes)
-                        for chain_id, aux_work in self.merged_work.iteritems()]
+            merged_data = {}
+            for aux_work in self.merged_work.itervalues():
+                data = dict(target=aux_work['target'],
+                            hash=aux_work['hash'],
+                            height=aux_work['height'],
+                            index=mm_hashes.index(aux_work['hash']),
+                            type=aux_work['type'],
+                            hashes=mm_hashes)
+                merged_data[aux_work['type']] = data
         else:
-            mm_later = []
+            merged_data = {}
             mm_data = None
 
         # here we recalculate the current merkle branch and partial
@@ -288,18 +383,16 @@ class MonitorNetwork(Greenlet):
         coinbase.outputs.append(
             Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
-        self.logger.info("Generating new block template with {} trans. Diff {}. Subsidy {}."
-                         .format(len(self._last_gbt['transactions']),
-                                 bits_to_difficulty(self._last_gbt['bits']),
-                                 self._last_gbt['coinbasevalue']))
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
                                         coinbase,
                                         extranonce_length,
                                         [Transaction(unhexlify(t['data']), fees=t['fee'])
                                          for t in self._last_gbt['transactions']])
-        bt_obj.mm_later = copy(mm_later)
-        hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
-        bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
+        # add in our merged mining data
+        if mm_data:
+            hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
+            bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
+        bt_obj.merged_data = merged_data
         bt_obj.job_id = job_id
         bt_obj.diff1 = self.config['diff1']
         bt_obj.algo = self.config['algo']
@@ -337,14 +430,33 @@ class RPCException(Exception):
 
 
 class MonitorAuxChain(Greenlet):
-    def __init__(self, server, **kwargs):
+    def _set_config(self, **config):
+        # A fast way to set defaults for the kwargs then set them as attributes
+        self.config = dict(enabled=False,
+                           name=None,
+                           signal=None,
+                           coinserv=[],
+                           flush=False,
+                           send=True)
+        self.config.update(config)
+
+        # check that we have at least one configured coin server
+        if not self.config['coinservs']:
+            self.logger.error("Shit won't work without a coinserver to connect to")
+            exit()
+
+        # check that we have at least one configured coin server
+        if not self.config['coin_id']:
+            self.logger.error("Merge mined coins must have an coin_id")
+            exit()
+
+    def __init__(self, server, jobmanager, **config):
         Greenlet.__init__(self)
-        self.netmon = server.netmon
+        self._set_config(**config)
+        self.jobmanager = jobmanager
         self.server = server
-        self.config = server.config
-        self.__dict__.update(kwargs)
-        self.logger = server.register_self.logger('auxmonitor_{}'
-                                                  .format(self.name))
+        self.reporter = server.reporter
+        self.logger = server.register_logger('auxmonitor_{}'.format(self.config['name']))
         self.state = {'difficulty': None,
                       'height': None,
                       'chain_id': None,
@@ -356,18 +468,18 @@ class MonitorAuxChain(Greenlet):
                       'accepts': 0,
                       'recent_blocks': deque(maxlen=15)}
 
-        self.coinservs = self.coinserv
+        self.coinservs = self.config['coinservs']
         self.coinserv = bitcoinrpc.AuthServiceProxy(
             "http://{0}:{1}@{2}:{3}/"
-            .format(self.coinserv[0]['username'],
-                    self.coinserv[0]['password'],
-                    self.coinserv[0]['address'],
-                    self.coinserv[0]['port']),
-            pool_kwargs=dict(maxsize=self.coinserv[0].get('maxsize', 10)))
+            .format(self.coinservs[0]['username'],
+                    self.coinservs[0]['password'],
+                    self.coinservs[0]['address'],
+                    self.coinservs[0]['port']),
+            pool_kwargs=dict(maxsize=self.coinservs[0].get('maxsize', 10)))
         self.coinserv.config = self.coinservs[0]
 
-        if self.signal:
-            gevent.signal(self.signal, self.update, reason="Signal recieved")
+        if self.config['signal']:
+            gevent.signal(self.config['signal'], self.update, reason="Signal recieved")
 
     def call_rpc(self, command, *args, **kwargs):
         try:
@@ -377,13 +489,85 @@ class MonitorAuxChain(Greenlet):
                              .format(command, e))
             raise RPCException(e)
 
+    def found_block(self, address, worker, hash_hex, header, coinbase_raw, job):
+        aux_data = job.merged_data[self.config['name']]
+        self.state['solves'] += 1
+        self.logger.log(36, "New {} Aux Block identified!".format(self.config['name']))
+        aux_block = (
+            pack.IntType(256, 'big').pack(aux_data['hash']).encode('hex'),
+            bitcoin_data.aux_pow_type.pack(dict(
+                merkle_tx=dict(
+                    tx=bitcoin_data.tx_type.unpack(job.coinbase.raw),
+                    block_hash=bitcoin_data.hash256(header),
+                    merkle_link=job.merkle_link,
+                ),
+                merkle_link=bitcoin_data.calculate_merkle_link(aux_data['hashes'],
+                                                               aux_data['index']),
+                parent_block_header=bitcoin_data.block_header_type.unpack(header),
+            )).encode('hex'),
+        )
+
+        retries = 0
+        while retries < 5:
+            retries += 1
+            new_height = aux_data['height'] + 1
+            try:
+                res = self.coinserv.getauxblock(*aux_block)
+            except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+                self.logger.error("{} Aux block failed to submit to the server {}!"
+                                  .format(self.config['name']), exc_info=True)
+                self.logger.error(getattr(e, 'error'))
+
+            if res is True:
+                self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(self.config['name']))
+                self.state['block_solve'] = int(time.time())
+                self.state['accepts'] += 1
+                self.state['recent_blocks'].append(
+                    dict(height=new_height, timestamp=int(time.time())))
+                if self.config['send']:
+                    self.logger.info("Submitting {} new block to reporter"
+                                     .format(self.config['name']))
+                    try:
+                        hsh = self.coinserv.getblockhash(new_height)
+                    except Exception:
+                        self.logger.info("", exc_info=True)
+                        hsh = ''
+                    try:
+                        block = self.coinserv.getblock(hsh)
+                    except Exception:
+                        self.logger.info("", exc_info=True)
+                    try:
+                        trans = self.coinserv.gettransaction(block['tx'][0])
+                        amount = trans['details'][0]['amount']
+                    except Exception:
+                        self.logger.info("", exc_info=True)
+                        amount = -1
+                    self.reporter.add_block(
+                        address,
+                        new_height,
+                        int(amount * 100000000),
+                        -1,
+                        "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
+                        hsh,
+                        merged=self.config['coin_id'],
+                        worker=worker)
+                break  # break retry loop if success
+            else:
+                self.logger.error(
+                    "{} Aux Block failed to submit to the server, "
+                    "server returned {}!".format(self.config['name'], res),
+                    exc_info=True)
+            sleep(1)
+        else:
+            self.state['rejects'] += 1
+
     def update(self, reason=None):
         if reason:
             self.logger.info("Updating {} aux work from a signal recieved!"
-                             .format(self.name))
+                             .format(self.config['name']))
 
         # cheap hack to prevent a race condition...
-        if self.netmon._poll_connection is None:
+        if self.jobmanager._poll_connection is None:
             self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
             sleep(1)
             return False
@@ -394,44 +578,45 @@ class MonitorAuxChain(Greenlet):
             sleep(2)
             return False
 
-        #self.logger.debug("Aux RPC returned: {}".format(auxblock))
         new_merged_work = dict(
             hash=int(auxblock['hash'], 16),
             target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
-            merged_proxy=self.coinserv,
-            monitor=self
+            type=self.config['name']
         )
         self.state['chain_id'] = auxblock['chainid']
-        if new_merged_work != self.netmon.merged_work.get(auxblock['chainid']):
+        if new_merged_work['hash'] != self.jobmanager.merged_work.get(auxblock['chainid'], {'hash': None})['hash']:
             try:
                 height = self.coinserv.getblockcount()
             except RPCException:
                 sleep(2)
                 return False
-            self.logger.info("New aux work announced! Diff {}. RPC returned: {}"
+            self.logger.info("New aux work announced! Diff {:,.4f}. Height {:,}"
                              .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
-                                     new_merged_work))
-            self.netmon.merged_work[auxblock['chainid']] = new_merged_work
+                                     height))
+            # add height to work spec for future logging
+            new_merged_work['height'] = height
+
+            self.jobmanager.merged_work[auxblock['chainid']] = new_merged_work
             self.state['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
             # only push the job if there's a new block height discovered.
             if self.state['height'] != height:
                 self.state['height'] = height
-                self.netmon.generate_job(push=True, flush=self.flush)
+                self.jobmanager.generate_job(push=True, flush=self.config['flush'])
                 self.state['work_restarts'] += 1
             else:
-                self.monitor_network.generate_job()
+                self.jobmanager.generate_job()
                 self.state['new_jobs'] += 1
 
     def kill(self, *args, **kwargs):
         """ Override our default kill method and kill our child greenlets as
         well """
         self.logger.info("Auxilury network monitor for {} shutting down..."
-                         .format(self.name))
+                         .format(self.config['name']))
         Greenlet.kill(self, *args, **kwargs)
 
     def _run(self):
         self.logger.info("Auxilury network monitor for {} starting up..."
-                         .format(self.name))
+                         .format(self.config['name']))
         while True:
             if not self.update():
                 continue

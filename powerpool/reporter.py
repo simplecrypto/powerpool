@@ -1,4 +1,3 @@
-import logging
 import time
 
 from gevent import Greenlet, sleep, spawn
@@ -26,8 +25,8 @@ class NoopReporter(Greenlet):
     def agent_send(self, address, worker, typ, data, time):
         raise NotImplementedError
 
-    def transmit_block(self, address, worker, height, total_subsidy, fees,
-                       hex_bits, hash, merged):
+    def transmit_block(self, address, height, total_subsidy, fees,
+                       hex_bits, hash, merged, worker):
         raise NotImplementedError
 
 
@@ -41,7 +40,7 @@ class CeleryReporter(Greenlet):
 
         # check that we have at least one configured coin server
         if not self.config['celery_task_prefix']:
-            logger.error("You need to specify a celery prefix")
+            self.logger.error("You need to specify a celery prefix")
             exit()
 
     def __init__(self, server, **config):
@@ -61,25 +60,25 @@ class CeleryReporter(Greenlet):
 
     # Remote methods to send information to other servers
     ########################
-    def add_one_minute(self, *args):
-        self.queue.put(("add_one_minute", args, {}))
+    def add_one_minute(self, *args, **kwargs):
+        self.queue.put(("add_one_minute", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
-                    .format("add_one_minute", args))
+                         .format("add_one_minute", args))
 
-    def add_share(self, *args):
-        self.queue.put(("add_share", args, {}))
+    def add_share(self, *args, **kwargs):
+        self.queue.put(("add_share", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
-                    .format("add_shares", args))
+                         .format("add_shares", args))
 
-    def agent_send(self, *args):
-        self.queue.put(("agent_send", args, {}))
+    def agent_send(self, *args, **kwargs):
+        self.queue.put(("agent_send", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
-                    .format("agent_send", args))
+                         .format("agent_send", args))
 
-    def add_block(self, *args):
-        self.queue.put(("add_block", args, {}))
+    def add_block(self, *args, **kwargs):
+        self.queue.put(("add_block", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
-                    .format("transmit_block", args))
+                         .format("transmit_block", args))
 
     def _run(self):
         self.share_reporter = spawn(self.report_shares)
@@ -88,8 +87,9 @@ class CeleryReporter(Greenlet):
             try:
                 self.celery.send_task(
                     self.config['celery_task_prefix'] + '.' + name, args, kwargs)
-            except Exception:
-                self.logger.error("Unable to communicate with celery broker!")
+            except Exception as e:
+                self.logger.error("Unable to communicate with celery broker! {}"
+                                  .format(e))
             else:
                 self.queue.get()
 
@@ -97,7 +97,7 @@ class CeleryReporter(Greenlet):
         while True:
             sleep(self.config['share_batch_interval'])
             self.logger.info("Reporting shares for {:,} users"
-                        .format(len(self.addresses)))
+                             .format(len(self.addresses)))
             t = time.time()
             for address, tracker in self.addresses.iteritems():
                 tracker.report()
@@ -105,10 +105,10 @@ class CeleryReporter(Greenlet):
                 if (tracker.last_log + self.config['tracker_expiry_time']) < t:
                     del self.addresses[address]
             self.logger.info("Shares reported (queued) in {}"
-                        .format(time_format(time.time() - t)))
+                             .format(time_format(time.time() - t)))
 
             self.logger.info("Reporting one minute shares for {:,} address/workers"
-                        .format(len(self.workers)))
+                             .format(len(self.workers)))
             t = time.time()
             upper = (t // 60) * 60
             for worker_addr, tracker in self.workers.iteritems():
@@ -117,7 +117,7 @@ class CeleryReporter(Greenlet):
                 if (tracker.last_log + self.config['tracker_expiry_time']) < t:
                     del self.workers[worker_addr]
             self.logger.info("One minute shares reported (queued) in {}"
-                        .format(time_format(time.time() - t)))
+                             .format(time_format(time.time() - t)))
 
     def log_share(self, address, worker, amount, typ):
         """ Logs a share for a user """

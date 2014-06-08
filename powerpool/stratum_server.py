@@ -1,16 +1,12 @@
 import json
 import socket
-import logging
 import argparse
 import struct
 import random
 import time
 
 from binascii import hexlify, unhexlify
-from bitcoinrpc import CoinRPCException
 from cryptokit import target_from_diff, uint256_from_str
-from cryptokit.bitcoin import data as bitcoin_data
-from cryptokit.util import pack
 from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
 from gevent.event import Event
@@ -490,161 +486,23 @@ class StratumClient(GenericClient):
         self.server.shares.incr(difficulty)
 
         header_hash = sha256(sha256(header).digest()).digest()[::-1]
-        header_hash_int = bitcoin_data.hash256(header)
         hash_hex = hexlify(header_hash)
 
-        def check_merged_block(mm_later):
-            aux_work, index, hashes = mm_later
-            if hash_int <= aux_work['target']:
-                monitor = aux_work['monitor']
-                self.server.aux_state[monitor.name]['solves'] += 1
-                self.logger.log(36, "New {} Aux Block identified!".format(monitor.name))
-                aux_block = (
-                    pack.IntType(256, 'big').pack(aux_work['hash']).encode('hex'),
-                    bitcoin_data.aux_pow_type.pack(dict(
-                        merkle_tx=dict(
-                            tx=bitcoin_data.tx_type.unpack(job.coinbase.raw),
-                            block_hash=header_hash_int,
-                            merkle_link=job.merkle_link,
-                        ),
-                        merkle_link=bitcoin_data.calculate_merkle_link(hashes, index),
-                        parent_block_header=bitcoin_data.block_header_type.unpack(header),
-                    )).encode('hex'),
-                )
-
-                retries = 0
-                while retries < 5:
-                    retries += 1
-                    new_height = self.server.aux_state[monitor.name]['height'] + 1
-                    try:
-                        res = aux_work['merged_proxy'].getauxblock(*aux_block)
-                    except (CoinRPCException, socket.error, ValueError) as e:
-                        self.logger.error("{} Aux block failed to submit to the server {}!"
-                                          .format(monitor.name), exc_info=True)
-                        self.logger.error(getattr(e, 'error'))
-
-                    if res is True:
-                        self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(monitor.name))
-                        self.server.aux_state[monitor.name]['block_solve'] = int(time.time())
-                        self.server.aux_state[monitor.name]['accepts'] += 1
-                        self.server.aux_state[monitor.name]['recent_blocks'].append(
-                            dict(height=new_height, timestamp=int(time.time())))
-                        if monitor.send:
-                            self.logger.info("Submitting {} new block to reporter"
-                                             .format(monitor.name))
-                            try:
-                                hsh = aux_work['merged_proxy'].getblockhash(new_height)
-                            except Exception:
-                                self.logger.info("", exc_info=True)
-                                hsh = ''
-                            try:
-                                block = aux_work['merged_proxy'].getblock(hsh)
-                            except Exception:
-                                self.logger.info("", exc_info=True)
-                            try:
-                                trans = aux_work['merged_proxy'].gettransaction(block['tx'][0])
-                                amount = trans['details'][0]['amount']
-                            except Exception:
-                                self.logger.info("", exc_info=True)
-                                amount = -1
-                            self.reporter.add_block(
-                                self.address,
-                                new_height,
-                                int(amount * 100000000),
-                                -1,
-                                "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_work['target']).bits,
-                                hsh,
-                                merged=monitor.celery_id)
-                        break  # break retry loop if success
-                    else:
-                        self.logger.error(
-                            "{} Aux Block failed to submit to the server, "
-                            "server returned {}!".format(monitor.name, res),
-                            exc_info=True)
-                    sleep(1)
-                else:
-                    self.server.aux_state[monitor.name]['rejects'] += 1
-
-        for mm in job.mm_later:
-            spawn(check_merged_block, mm)
+        for chain_id, data in job.merged_data.iteritems():
+            if hash_int <= data['target']:
+                self.jobmanager.found_merged_block(self.address,
+                                                   self.worker,
+                                                   hash_hex,
+                                                   header,
+                                                   job.job_id,
+                                                   job.coinbase.raw,
+                                                   data['type'])
 
         # valid network hash?
         if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
-        self.jobmanager.block_stats['solves'] += 1
-        block = hexlify(job.submit_serial(header))
-
-        def submit_block(conn):
-
-            retries = 0
-            while retries < 5:
-                retries += 1
-                res = "failed"
-                try:
-                    res = conn.getblocktemplate({'mode': 'submit',
-                                                 'data': block})
-                except (CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.info("Block failed to submit to the server {} with submitblock!"
-                                     .format(conn.name))
-                    if getattr(e, 'error', {}).get('code', 0) != -8:
-                        self.logger.error(getattr(e, 'error'), exc_info=True)
-                    try:
-                        res = conn.submitblock(block)
-                    except (CoinRPCException, socket.error, ValueError) as e:
-                        self.logger.error("Block failed to submit to the server {}!"
-                                          .format(conn.name), exc_info=True)
-                        self.logger.error(getattr(e, 'error'))
-
-                if res is None:
-                    self.jobmanager.block_stats['accepts'] += 1
-                    self.jobmanager.recent_blocks.append(
-                        dict(height=job.block_height, timestamp=int(time.time())))
-                    self.reporter.add_block(
-                        self.address,
-                        job.block_height,
-                        job.total_value,
-                        job.fee_total,
-                        hexlify(job.bits),
-                        hash_hex)
-                    self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
-                                     .format(conn.name))
-                    self.jobmanager.block_solve = int(time.time())
-                    break  # break retry loop if success
-                else:
-                    self.logger.error(
-                        "Block failed to submit to the server {}, "
-                        "server returned {}!".format(conn.name, res),
-                        exc_info=True)
-                sleep(1)
-                self.logger.info("Retry {} for connection {}".format(retries, conn.name))
-            else:
-                self.jobmanager.block_stats['rejects'] += 1
-
-        tries = 0
-        while tries < 200:
-            if not self.jobmanager.live_connections:
-                tries += 1
-                self.logger.error("No live connections to submit new block to!"
-                                  " Retry {} / 200.".format(tries))
-                sleep(0.1)
-                continue
-
-            for conn in self.jobmanager.live_connections:
-                # spawn a new greenlet for each submission to do them all async.
-                # lower orphan chance
-                spawn(submit_block, conn)
-
-            break
-
-        self.logger.log(35, "Valid network block identified!")
-        self.logger.info("New block at height {} with hash {} and subsidy {}"
-                         .format(self.jobmanager.current_net['height'],
-                                 job.total_value, hash_hex))
-        self.logger.debug("New block hex dump:\n{}".format(block))
-        self.logger.info("Coinbase: {}".format(str(job.coinbase.to_dict())))
-        for trans in job.transactions:
-            self.logger.debug(str(trans.to_dict()))
+        self.jobmanager.found_block(self.address, self.worker, hash_hex, header, job.job_id)
 
         return self.BLOCK_FOUND, difficulty
 
