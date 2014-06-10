@@ -9,14 +9,12 @@ import time
 from gevent import spawn, sleep
 from gevent.monkey import patch_all
 from gevent.event import Event
-from gevent.coros import RLock
 patch_all()
 import logging
-from collections import deque
 from pprint import pformat
 
 from .stratum_server import StratumManager
-from .monitor import MonitorWSGI
+from .monitor import MonitorWSGI, StatManager
 from .utils import import_helper
 
 
@@ -215,59 +213,3 @@ class PowerPool(object):
                 sleep(0.1)
         except gevent.GreenletExit:
             self.logger.info("Stat manager exiting...")
-
-
-class StatManager(object):
-    def __init__(self):
-        self._val = 0
-        self.mins = deque([], 60)
-        self.seconds = deque([], 60)
-        self.lock = RLock()
-        self.total = 0
-
-    def incr(self, amount=1):
-        """ Increments the counter """
-        with self.lock:
-            self._val += amount
-    __add__ = incr
-
-    def tick(self):
-        """ should be called once every second """
-        val = self.reset()
-        self.seconds.append(val)
-        self.total += val
-
-    def tock(self):
-        # rotate the total into a minute slot
-        last_min = sum(self.seconds)
-        self.mins.append(last_min)
-        return last_min
-
-    @property
-    def hour(self):
-        return sum(self.mins)
-
-    @property
-    def minute(self):
-        return sum(self.seconds)
-
-    @property
-    def second_avg(self):
-        return sum(self.seconds) / 60.0
-
-    @property
-    def min_avg(self):
-        return sum(self.mins) / 60.0
-
-    def summary(self):
-        return dict(total=self.total,
-                    min_total=self.minute,
-                    hour_total=self.hour,
-                    min_avg=self.min_avg)
-
-    def reset(self):
-        """ Locks the counter, resets the value, then returns the value """
-        with self.lock:
-            curr = self._val
-            self._val = 0
-            return curr

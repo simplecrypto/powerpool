@@ -9,7 +9,6 @@ from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
 from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
-from gevent.event import Event
 from gevent.queue import Queue
 from gevent.pool import Pool
 from hashlib import sha1
@@ -253,6 +252,7 @@ class StratumClient(GenericClient):
         self.transmitted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
+        self.job_counter = 0
         # last time we sent graphing data to the server
         self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
         self.last_graph_transmit = time.time() - self.time_seed
@@ -262,14 +262,6 @@ class StratumClient(GenericClient):
         self.next_diff = self.config['start_difficulty']
         self.connection_time = int(time.time())
         self.msg_id = None
-
-        # trigger to send a new block notice to a user
-        self.new_block_event = None
-        self.new_block_event = Event()
-        self.new_block_event.rawlink(self.new_block_call)
-        self.new_work_event = None
-        self.new_work_event = Event()
-        self.new_work_event.rawlink(self.new_work_call)
 
         # where we put all the messages that need to go out
         self.write_queue = Queue()
@@ -399,25 +391,16 @@ class StratumClient(GenericClient):
             self.difficulty = self.next_diff
             self.push_difficulty()
 
-        new_job_id = sha1(urandom(4)).hexdigest()
-        self.job_mapper[new_job_id] = (self.difficulty, jobid)
-
-        send_params = job.stratum_params() + [flush]
-        send_params[0] = new_job_id
-        # 0: job_id 1: prevhash 2: coinbase1 3: coinbase2 4: merkle_branch
-        # 5: version 6: nbits 7: ntime 8: clean_jobs
         self.logger.info("Sending job id {} to worker {}.{}"
-                         .format(jobid, self.address, self.worker))
-        self.logger.debug(
-            "Worker job details\n\tjob_id: {0}\n\tprevhash: {1}"
-            "\n\tcoinbase1: {2}\n\tcoinbase2: {3}\n\tmerkle_branch: {4}"
-            "\n\tversion: {5}\n\tnbits: {6} ({bt:064x})\n\tntime: {7}"
-            "\n\tclean_jobs: {8}\n"
-            .format(*send_params, bt=job.bits_target))
-        send = {'params': send_params,
-                'id': None,
-                'method': 'mining.notify'}
-        self.write_queue.put(json.dumps(send, separators=(',', ':')) + "\n")
+                         .format(job.job_id, self.address, self.worker))
+
+        self._push(job)
+
+    def _push(self, job, flush=False):
+        self.job_counter += 1
+        job_id = str(self.job_counter)
+        self.job_mapper[job_id] = (self.difficulty, job.job_id)
+        self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"))
 
     def submit_job(self, data):
         """ Handles recieving work submission and checking that it is valid

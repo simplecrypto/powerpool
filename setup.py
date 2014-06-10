@@ -12,7 +12,7 @@ setup(name='powerpool',
       packages=find_packages(),
       entry_points={
           'console_scripts': [
-              'pp = powerpool.manager:main'
+              'pp = powerpool.main:main'
           ]
       }
       )

@@ -4,8 +4,8 @@ from collections import deque
 from cryptokit.block import BlockTemplate
 from cryptokit.transaction import Transaction
 from gevent.wsgi import WSGIServer
-
-from .stats import StatManager
+from gevent.coros import RLock
+from collections import deque
 
 import logging
 import sys
@@ -177,3 +177,59 @@ def memory():
     out = {key: sys.getsizeof(current_app.config[key]) for key in keys}
     out['total'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return jsonify(**out)
+
+
+class StatManager(object):
+    def __init__(self):
+        self._val = 0
+        self.mins = deque([], 60)
+        self.seconds = deque([], 60)
+        self.lock = RLock()
+        self.total = 0
+
+    def incr(self, amount=1):
+        """ Increments the counter """
+        with self.lock:
+            self._val += amount
+    __add__ = incr
+
+    def tick(self):
+        """ should be called once every second """
+        val = self.reset()
+        self.seconds.append(val)
+        self.total += val
+
+    def tock(self):
+        # rotate the total into a minute slot
+        last_min = sum(self.seconds)
+        self.mins.append(last_min)
+        return last_min
+
+    @property
+    def hour(self):
+        return sum(self.mins)
+
+    @property
+    def minute(self):
+        return sum(self.seconds)
+
+    @property
+    def second_avg(self):
+        return sum(self.seconds) / 60.0
+
+    @property
+    def min_avg(self):
+        return sum(self.mins) / 60.0
+
+    def summary(self):
+        return dict(total=self.total,
+                    min_total=self.minute,
+                    hour_total=self.hour,
+                    min_avg=self.min_avg)
+
+    def reset(self):
+        """ Locks the counter, resets the value, then returns the value """
+        with self.lock:
+            curr = self._val
+            self._val = 0
+            return curr

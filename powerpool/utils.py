@@ -1,5 +1,17 @@
 import collections
+import time
 import importlib
+import cProfile
+
+
+def profileit(func):
+    def wrapper(*args, **kwargs):
+        datafn = func.__name__ + ".profile"  # Name the data file sensibly
+        prof = cProfile.Profile()
+        retval = prof.runcall(func, *args, **kwargs)
+        prof.dump_stats(datafn)
+        return retval
+    return wrapper
 
 
 def time_format(seconds):
@@ -25,3 +37,17 @@ def recursive_update(d, u):
 def import_helper(dotted_path):
     module, cls = dotted_path.rsplit(".", 1)
     return getattr(importlib.import_module(module), cls)
+
+
+def timeit(method):
+
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+
+        print '%r (%r, %r) %s' % \
+              (method.__name__, args, kw, time_format(te-ts))
+        return result
+
+    return timed

@@ -439,14 +439,17 @@ class MonitorNetwork(Greenlet):
         self.jobs[job_id] = bt_obj
         self.latest_job = job_id
         if push:
+            t = time.time()
+            bt_obj.stratum_string()
             for idx, client in viewitems(self.stratum_manager.clients):
                 try:
-                    if flush:
-                        client.new_block_event.set()
-                    else:
-                        client.new_work_event.set()
+                    if client.authenticated:
+                        client._push(bt_obj)
                 except AttributeError:
                     pass
+            self.logger.info("New job enqueued for transmission to {} users in {}"
+                             .format(len(self.stratum_manager.clients),
+                                     time_format(time.time() - t)))
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
