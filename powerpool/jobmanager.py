@@ -67,7 +67,7 @@ class MonitorNetwork(Greenlet):
 
         # internal greenlets
         self._node_monitor = None
-        self._poll_height = None
+        self._height_poller = None
 
         self.jobs = {}
         self.live_connections = []
@@ -265,6 +265,8 @@ class MonitorNetwork(Greenlet):
         well """
         self.logger.info("Network monitoring jobmanager shutting down...")
         self._node_monitor.kill(*args, **kwargs)
+        if self._height_poller:
+            self._height_poller.kill(*args, **kwargs)
         # stop all greenlets
         for gl in self.auxmons.itervalues():
             gl.kill(timeout=kwargs.get('timeout'), block=False)
@@ -277,7 +279,7 @@ class MonitorNetwork(Greenlet):
         if not self.config['signal']:
             self.logger.info("No push block notif signal defined, polling RPC "
                              "server every {} seconds".format(self.config['block_poll']))
-            self._poll_height = spawn(self._poll_height)
+            self._height_poller = spawn(self._poll_height)
 
         while True:
             try:
