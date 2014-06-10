@@ -2,7 +2,6 @@ import bitcoinrpc
 import struct
 import urllib3
 import gevent
-import signal
 import socket
 import time
 
@@ -17,15 +16,23 @@ from cryptokit.bitcoin import data as bitcoin_data
 from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, Greenlet, spawn
 
+from .utils import time_format
+
 
 class MonitorNetwork(Greenlet):
     def _set_config(self, **kwargs):
         # A fast way to set defaults for the kwargs then set them as attributes
         self.config = dict(coinserv=None, extranonce_serv_size=8,
-                           extranonce_size=4, diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
-                           merged=None, block_poll=0.2, job_generate_int=75,
-                           rpc_ping_int=2, pow_func='ltc_scrypt', pool_address=None,
-                           donate_address=None)
+                           extranonce_size=4,
+                           diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
+                           merged=None,
+                           block_poll=0.2,
+                           job_refresh=15,
+                           rpc_ping_int=2,
+                           pow_func='ltc_scrypt',
+                           pool_address=None,
+                           donate_address=None,
+                           signal=None)
         self.config.update(kwargs)
 
         if (not get_bcaddress_version(self.config['pool_address']) or
@@ -57,7 +64,10 @@ class MonitorNetwork(Greenlet):
         self._down_connections = []
         self._job_counter = 0
         self._last_aux_update = dict()
+
+        # internal greenlets
         self._node_monitor = None
+        self._poll_height = None
 
         self.jobs = {}
         self.live_connections = []
@@ -98,6 +108,11 @@ class MonitorNetwork(Greenlet):
             conn.config = serv
             conn.name = "{}:{}".format(serv['address'], serv['port'])
             self._down_connections.append(conn)
+
+        if self.config['signal']:
+            self.logger.info("Listening for push block notifs on signal {}"
+                             .format(self.config['signal']))
+            gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
 
     def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
         job = self.jobs[job_id]
@@ -174,7 +189,7 @@ class MonitorNetwork(Greenlet):
 
         self.logger.log(35, "Valid network block identified!")
         self.logger.info("New block at height {} with hash {} and subsidy {}"
-                         .format(self.jobmanager.current_net['height'],
+                         .format(self.current_net['height'],
                                  job.total_value, hash_hex))
         self.logger.debug("New block hex dump:\n{}".format(block))
         self.logger.info("Coinbase: {}".format(str(job.coinbase.to_dict())))
@@ -259,7 +274,26 @@ class MonitorNetwork(Greenlet):
         self.logger.info("Network monitoring jobmanager starting up...")
         # start watching our nodes to see if they're up or not
         self._node_monitor = spawn(self._monitor_nodes)
-        i = 0
+        if not self.config['signal']:
+            self.logger.info("No push block notif signal defined, polling RPC "
+                             "server every {} seconds".format(self.config['block_poll']))
+            self._poll_height = spawn(self._poll_height)
+
+        while True:
+            try:
+                if self._poll_connection is None:
+                    self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+                    sleep(1)
+                    continue
+
+                self.getblocktemplate()
+            except Exception:
+                self.logger.error("Unhandled exception!", exc_info=True)
+                pass
+
+            sleep(self.config['job_refresh'])
+
+    def _poll_height(self):
         while True:
             try:
                 if self._poll_connection is None:
@@ -273,12 +307,6 @@ class MonitorNetwork(Greenlet):
                     # dump the current transaction pool, refresh and push the
                     # event
                     self.getblocktemplate(new_block=True)
-                else:
-                    # check for new transactions when count interval has passed
-                    if i >= self.config['job_generate_int']:
-                        i = 0
-                        self.getblocktemplate()
-                    i += 1
             except Exception:
                 self.logger.error("Unhandled exception!", exc_info=True)
                 pass
@@ -317,7 +345,7 @@ class MonitorNetwork(Greenlet):
                 ]})
         except Exception as e:
             self.logger.warn("Failed to fetch new job. Reason: {}".format(e))
-            self._down_connection(self._poll_connection)
+            self.down_connection(self._poll_connection)
             return False
 
         # generate a new job if we got some new work!
