@@ -5,6 +5,7 @@ import setproctitle
 import gevent
 import signal
 import time
+import sys
 
 from gevent import spawn, sleep
 from gevent.monkey import patch_all
@@ -41,7 +42,11 @@ class PowerPool(object):
 
         # setup all our log handlers
         for log_cfg in loggers:
-            handler = getattr(logging, log_cfg['type'])()
+            if log_cfg['type'] == "StreamHandler":
+                kwargs = dict(stream=sys.stdout)
+            else:
+                kwargs = dict()
+            handler = getattr(logging, log_cfg['type'])(**kwargs)
             log_level = getattr(logging, log_cfg['level'].upper())
             handler.setLevel(log_level)
             fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
@@ -127,7 +132,7 @@ class PowerPool(object):
 
         # the monitor server. a simple flask http server that lets you view
         # internal data structures to monitor server health
-        self.monitor_server = MonitorWSGI(**self.raw_config.get('monitor', {}))
+        self.monitor_server = MonitorWSGI(self, **self.raw_config.get('monitor', {}))
         if self.monitor_server:
             self.monitor_server.start()
             self.servers.append(self.monitor_server)
@@ -164,7 +169,7 @@ class PowerPool(object):
                 self.logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
             self.logger.info("Shutdown requested again by system, "
-                        "exiting without cleanup")
+                             "exiting without cleanup")
 
         self.logger.info("=" * 80)
 
@@ -173,6 +178,34 @@ class PowerPool(object):
         self.logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
                          .format(signal, self.term_timeout))
         self._exit_signal.set()
+
+    @property
+    def share_percs(self):
+        acc_tot = self.shares.total or 1
+        low_tot = self.reject_low.total
+        dup_tot = self.reject_dup.total
+        stale_tot = self.reject_stale.total
+        return dict(
+            low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
+            stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
+            dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
+        )
+
+    @property
+    def status(self):
+        return dict(stratum_connects=self.stratum_connects.summary(),
+                    stratum_disconnects=self.stratum_disconnects.summary(),
+                    agent_connects=self.agent_connects.summary(),
+                    agent_disconnects=self.agent_disconnects.summary(),
+                    shares=self.shares.summary(),
+                    reject_low=self.reject_low.summary(),
+                    reject_stale=self.reject_stale.summary(),
+                    reject_dup=self.reject_dup.summary(),
+                    share_percs=self.share_percs,
+                    mhps=(self.jobmanager.config['hashes_per_share'] *
+                          self.shares.minute / 1000000 / 60.0),
+                    uptime=str(datetime.datetime.utcnow() - self.server_start),
+                    server_start=str(self.server_start))
 
     def tick_stats(self):
         try:

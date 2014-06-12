@@ -58,6 +58,12 @@ class CeleryReporter(Greenlet):
         self.addresses = {}
         self.workers = {}
 
+    @property
+    def status(self):
+        return dict(queue_size=self.queue.qsize(),
+                    addresses_count=len(self.addresses),
+                    workers_count=len(self.workers))
+
     # Remote methods to send information to other servers
     ########################
     def add_one_minute(self, *args, **kwargs):

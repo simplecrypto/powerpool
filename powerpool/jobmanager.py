@@ -25,6 +25,7 @@ class MonitorNetwork(Greenlet):
         self.config = dict(coinserv=None, extranonce_serv_size=8,
                            extranonce_size=4,
                            diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
+                           hashes_per_share=0xFFFF,
                            merged=None,
                            block_poll=0.2,
                            job_refresh=15,
@@ -114,6 +115,12 @@ class MonitorNetwork(Greenlet):
                              .format(self.config['signal']))
             gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
 
+    @property
+    def status(self):
+        return dict(main_net_state=self.current_net,
+                    block_stats=self.block_stats,
+                    job_count=len(self.jobs))
+
     def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
         job = self.jobs[job_id]
         self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
@@ -189,12 +196,14 @@ class MonitorNetwork(Greenlet):
 
         self.logger.log(35, "Valid network block identified!")
         self.logger.info("New block at height {} with hash {} and subsidy {}"
-                         .format(self.current_net['height'],
-                                 job.total_value, hash_hex))
-        self.logger.debug("New block hex dump:\n{}".format(block))
-        self.logger.info("Coinbase: {}".format(str(job.coinbase.to_dict())))
-        for trans in job.transactions:
-            self.logger.debug(str(trans.to_dict()))
+                         .format(job.block_height,
+                                 hash_hex,
+                                 job.total_value))
+        if __debug__:
+            self.logger.debug("New block hex dump:\n{}".format(block))
+            self.logger.debug("Coinbase: {}".format(str(job.coinbase.to_dict())))
+            for trans in job.transactions:
+                self.logger.debug(str(trans.to_dict()))
 
     def call_rpc(self, command, *args, **kwargs):
         try:
@@ -330,8 +339,6 @@ class MonitorNetwork(Greenlet):
         return False
 
     def getblocktemplate(self, new_block=False, signal=False):
-        if signal:
-            self.logger.info("Generating new job from signal!")
         dirty = False
         try:
             # request local memory pool and load it in
@@ -350,12 +357,21 @@ class MonitorNetwork(Greenlet):
             self.down_connection(self._poll_connection)
             return False
 
+        # If this was from a push signal and the
+        if signal and self._last_gbt['height'] != bt['height']:
+            self.logger.info("Push block signal notified us of a new block!")
+            new_block = True
+        elif signal:
+            self.logger.info("Push block signal notified us of a block we "
+                             "already know about!")
+
         # generate a new job if we got some new work!
         if bt != self._last_gbt:
             self._last_gbt = bt
             dirty = True
 
         if new_block or dirty:
+
             self.logger.info("Generating new block template with {} trans. Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}."
                              .format(len(self._last_gbt['transactions']),
                                      bits_to_difficulty(self._last_gbt['bits']),

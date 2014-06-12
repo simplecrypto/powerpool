@@ -100,6 +100,17 @@ class StratumManager(object):
             self.stratum_servers.append(serv)
             serv.start()
 
+    @property
+    def status(self):
+        return dict(client_count=len(self.clients),
+                    address_count=len(self.address_lut),
+                    address_worker_count=len(self.address_lut),
+                    client_count_authed=self.auth_count)
+
+    @property
+    def auth_count(self):
+        return sum([len(a) for a in self.address_lut.itervalues()])
+
     def set_conn(self, client):
         """ Called when a new connection is recieved by stratum """
         self.clients[client.id] = client
