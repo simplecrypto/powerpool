@@ -15,7 +15,7 @@ import logging
 from pprint import pformat
 
 from .stratum_server import StratumManager
-from .monitor import MonitorWSGI, StatManager
+from .monitor import MonitorWSGI, MinuteStatManager, SecondStatManager
 from .utils import import_helper
 
 
@@ -84,16 +84,23 @@ class PowerPool(object):
         # Stats tracking for the whole server
         #####
         self.server_start = datetime.datetime.utcnow()
-        # shares
-        self.shares = StatManager()
-        self.reject_low = StatManager()
-        self.reject_dup = StatManager()
-        self.reject_stale = StatManager()
-        # connections
-        self.stratum_connects = StatManager()
-        self.stratum_disconnects = StatManager()
-        self.agent_connects = StatManager()
-        self.agent_disconnects = StatManager()
+        onemin_stat_keys = ['reject_low', 'reject_dup', 'reject_stale',
+                            'stratum_connects', 'stratum_disconnects',
+                            'agent_connects', 'agent_disconnects']
+        onesec_stat_keys = ['shares']
+
+        # Setup all our stat managers
+        self.min_stat_counters = []
+        self.sec_stat_counters = []
+        for key in onemin_stat_keys:
+            new = MinuteStatManager()
+            setattr(self, key, new)
+            self.min_stat_counters.append(new)
+
+        for key in onesec_stat_keys:
+            new = SecondStatManager()
+            setattr(self, key, new)
+            self.sec_stat_counters.append(new)
 
     def register_logger(self, name):
         logger = logging.getLogger(name)
@@ -211,38 +218,23 @@ class PowerPool(object):
         try:
             self.logger.info("Stat rotater starting up")
             last_tick = int(time.time())
-            last_send = (int(time.time()) // 60) * 60
+            last_send = (last_tick // 60) * 60
             while True:
                 now = time.time()
                 # time to rotate minutes?
                 if now > (last_send + 60):
-                    shares = self.shares.tock()
-                    reject_low = self.reject_low.tock()
-                    reject_dup = self.reject_dup.tock()
-                    reject_stale = self.reject_stale.tock()
-                    self.stratum_connects.tock()
-                    self.stratum_disconnects.tock()
-                    self.agent_connects.tock()
-                    self.agent_disconnects.tock()
-
-                    if shares or reject_dup or reject_low or reject_stale:
-                        self.reporter.add_one_minute(
-                            'pool', shares, now, '', reject_dup,
-                            reject_low, reject_stale)
+                    for manager in self.min_stat_counters:
+                        manager.tock()
+                    for manager in self.sec_stat_counters:
+                        manager.tock()
                     last_send += 60
 
                 # time to tick?
                 if now > (last_tick + 1):
-                    self.shares.tick()
-                    self.reject_low.tick()
-                    self.reject_dup.tick()
-                    self.reject_stale.tick()
-                    self.stratum_connects.tick()
-                    self.stratum_disconnects.tick()
-                    self.agent_connects.tick()
-                    self.agent_disconnects.tick()
+                    for manager in self.sec_stat_counters:
+                        manager.tick()
                     last_tick += 1
 
-                sleep(0.1)
+                sleep(last_tick - time.time() + 1.0)
         except gevent.GreenletExit:
             self.logger.info("Stat manager exiting...")

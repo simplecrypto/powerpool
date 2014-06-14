@@ -85,9 +85,7 @@ def jsonize(item):
             new.append(jsonize(part))
         return new
     else:
-        if isinstance(item, StatManager):
-            return item.summary()
-        elif isinstance(item, BlockTemplate):
+        if isinstance(item, BlockTemplate):
             return jsonize(item.__dict__)
         elif isinstance(item, Transaction):
             item.disassemble()
@@ -153,25 +151,25 @@ def agents():
     return jsonify(agents=agents)
 
 
-class StatManager(object):
+class SecondStatManager(object):
+    """ Monitors the last 60 minutes of a specific number at 1 minute precision
+    and the last 1 minute of a number at 60 second precision.
+    """
     def __init__(self):
         self._val = 0
         self.mins = deque([], 60)
         self.seconds = deque([], 60)
-        self.lock = RLock()
         self.total = 0
 
     def incr(self, amount=1):
         """ Increments the counter """
-        with self.lock:
-            self._val += amount
-    __add__ = incr
+        self._val += amount
 
     def tick(self):
         """ should be called once every second """
-        val = self.reset()
-        self.seconds.append(val)
-        self.total += val
+        self.seconds.append(self._val)
+        self.total += self._val
+        self._val = 0
 
     def tock(self):
         # rotate the total into a minute slot
@@ -185,7 +183,8 @@ class StatManager(object):
 
     @property
     def minute(self):
-        return sum(self.seconds)
+        if len(self.mins):
+            return self.mins[0]
 
     @property
     def second_avg(self):
@@ -201,9 +200,18 @@ class StatManager(object):
                     hour_total=self.hour,
                     min_avg=self.min_avg)
 
-    def reset(self):
-        """ Locks the counter, resets the value, then returns the value """
-        with self.lock:
-            curr = self._val
-            self._val = 0
-            return curr
+
+class MinuteStatManager(SecondStatManager):
+    """ Monitors the last 60 minutes of a specific number at 1 minute precision
+    """
+    def __init__(self):
+        SecondStatManager.__init__(self)
+        self._val = 0
+        self.mins = deque([], 60)
+        self.total = 0
+
+    def tock(self):
+        """ should be called once every minute """
+        self.mins.append(self._val)
+        self.total += self._val
+        self._val = 0

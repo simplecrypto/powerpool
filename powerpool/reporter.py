@@ -34,6 +34,7 @@ class CeleryReporter(Greenlet):
     def _set_config(self, **config):
         self.config = dict(celery_task_prefix=None,
                            celery={'CELERY_DEFAULT_QUEUE': 'celery'},
+                           report_pool_stats=True,
                            share_batch_interval=60,
                            tracker_expiry_time=180)
         self.config.update(config)
@@ -87,8 +88,11 @@ class CeleryReporter(Greenlet):
                          .format("transmit_block", args))
 
     def _run(self):
-        self.share_reporter = spawn(self.report_shares)
+        self.share_reporter = spawn(self.report_loop)
         while True:
+            self._queue_proc()
+
+    def _queue_proc(self):
             name, args, kwargs = self.queue.peek()
             try:
                 self.celery.send_task(
@@ -99,49 +103,74 @@ class CeleryReporter(Greenlet):
             else:
                 self.queue.get()
 
-    def report_shares(self):
+    def report_loop(self):
+        """ Repeatedly do our share reporting on an interval """
         while True:
             sleep(self.config['share_batch_interval'])
-            self.logger.info("Reporting shares for {:,} users"
-                             .format(len(self.addresses)))
-            t = time.time()
-            for address, tracker in self.addresses.iteritems():
-                tracker.report()
-                # if the last log time was more than expiry time ago...
-                if (tracker.last_log + self.config['tracker_expiry_time']) < t:
-                    del self.addresses[address]
-            self.logger.info("Shares reported (queued) in {}"
-                             .format(time_format(time.time() - t)))
+            self._report_shares()
 
-            self.logger.info("Reporting one minute shares for {:,} address/workers"
-                             .format(len(self.workers)))
-            t = time.time()
+    def _report_shares(self, flush=False):
+        """ Goes through our internal aggregated share data structures and
+        reports them to our external storage. If asked to flush it will report
+        all one minute shares, otherwise it will only report minutes that have
+        passed. """
+        if flush:
+            self.logger.info("Flushing all aggreated share data...")
+
+        self.logger.info("Reporting shares for {:,} users"
+                         .format(len(self.addresses)))
+        t = time.time()
+        for address, tracker in self.addresses.iteritems():
+            tracker.report()
+            # if the last log time was more than expiry time ago...
+            if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                del self.addresses[address]
+
+        self.logger.info("Shares reported (queued) in {}"
+                         .format(time_format(time.time() - t)))
+        self.logger.info("Reporting one minute shares for {:,} address/workers"
+                         .format(len(self.workers)))
+        t = time.time()
+        if flush:
+            upper = t + 10
+        else:
             upper = (t // 60) * 60
-            for worker_addr, tracker in self.workers.iteritems():
-                tracker.report(upper=upper)
-                # if the last log time was more than expiry time ago...
-                if (tracker.last_log + self.config['tracker_expiry_time']) < t:
-                    del self.workers[worker_addr]
-            self.logger.info("One minute shares reported (queued) in {}"
-                             .format(time_format(time.time() - t)))
+        for worker_addr, tracker in self.workers.iteritems():
+            tracker.report(upper)
+            # if the last log time was more than expiry time ago...
+            if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                del self.workers[worker_addr]
+        self.logger.info("One minute shares reported (queued) in {}"
+                         .format(time_format(time.time() - t)))
 
     def log_share(self, address, worker, amount, typ):
-        """ Logs a share for a user """
+        """ Logs a share for a user and user/worker into all three share
+        aggregate sources. """
+        # log the share for the pool cache total as well
+        if address != "pool" and self.config['report_pool_stats']:
+            self.log_share("pool", '', amount, typ)
+
         # collecting for reporting to the website for display in graphs
         addr_worker = (address, worker)
         if addr_worker not in self.workers:
             self.workers[addr_worker] = WorkerTracker(self, address, worker)
         self.workers[(address, worker)].count_share(amount, typ)
+
         # reporting for payout share logging and vardiff rates
-        if typ == StratumClient.VALID_SHARE:
+        if typ == StratumClient.VALID_SHARE and address != "pool":
             if address not in self.addresses:
                 self.addresses[address] = AddressTracker(self, address)
             # for tracking vardiff speeds
             self.addresses[address].count_share(amount)
 
     def kill(self, *args, **kwargs):
-        self.logger.info("Shutting down CeleryReporter..")
         self.share_reporter.kill(*args, **kwargs)
+        self._report_shares(flush=True)
+        self.logger.info("Flushing the reporter task queue, {} items blocking "
+                         "exit".format(self.queue.qsize()))
+        while not self.queue.empty():
+            self._queue_proc()
+        self.logger.info("Shutting down CeleryReporter..")
         Greenlet.kill(self, *args, **kwargs)
 
 
@@ -155,18 +184,14 @@ class WorkerTracker(object):
         self.last_log = None
 
     def count_share(self, amount, typ):
-        curr = time.time()
+        curr = int(time.time())
         t = (curr // 60) * 60
         self.slices.setdefault(t, [0, 0, 0, 0])
         self.slices[t][typ] += amount
         self.last_log = curr
 
-    def report(self, flush=False, upper=None):
+    def report(self, upper):
         # only report minutes that are complete unless we're flushing
-        if not upper:  # allow precomputing upper for batch submission
-            upper = (time.time() // 60) * 60
-        if flush:
-            upper += 120
         for stamp in self.slices.keys():
             if stamp < upper:
                 acc, dup, low, stale = self.slices[stamp]
@@ -214,4 +239,4 @@ class AddressTracker(object):
                 total += self.minutes[stamp]
                 mins += 1
 
-        return total / mins
+        return total / (mins or 1)  # or 1 prevents divison by zero error

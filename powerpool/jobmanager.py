@@ -60,7 +60,7 @@ class MonitorNetwork(Greenlet):
         self.auxmons = {}
 
         # internal vars
-        self._last_gbt = None
+        self._last_gbt = {}
         self._poll_connection = None
         self._down_connections = []
         self._job_counter = 0
@@ -358,7 +358,7 @@ class MonitorNetwork(Greenlet):
             return False
 
         # If this was from a push signal and the
-        if signal and self._last_gbt['height'] != bt['height']:
+        if signal and self._last_gbt.get('height') != bt['height']:
             self.logger.info("Push block signal notified us of a new block!")
             new_block = True
         elif signal:
