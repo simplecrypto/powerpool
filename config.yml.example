@@ -1,131 +1,222 @@
-# a list of connections to daemons to get block templates from
-# and submit complete blocks to
-coinserv:
-    - port: 1234
-      address: 127.0.0.1
-      username: ''
-      password: ''
+# ############################################################################
+# This config file controls all facets of the powerpool mining server.
+# Commented values are the defaults. 
+# ############################################################################
 
-# a valid address that invalid usernames will go towards
-donate_address: ''
-# address that all blocks will go towards in escrow before sending to users
-pool_address: ''
-celery_task_prefix: simplecoin.tasks
-# the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
-# sha...
-#diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
-# The function used to compute proof of work. Options are scrypt, vert_scrypt
-#pow_func: scrypt
+# General process management configurations
+powerpool:
+    # The name of the powerpool process on the system. Useful for quickly
+    # identifying pid with grep and ps
+    procname: powerpool
+    # Grace period before outright terminating the process after termination is
+    # requested
+    #term_timeout: 3
+
+    # Configures standard python loggers. type must be a logging handler provided
+    # by python std lib
+    #loggers:
+    #    - type: StreamHandler
+    #      level: DEBUG
+    
+# The jobmanager is in charge of building jobs for the stratum workers, submitting
+# blocks to rpc servers, and pushing new block notifications to clients
+jobmanager:
+    # The class we'll load and provide the following configuration
+    type: powerpool.jobmanager.MonitorNetwork
+
+    # should we poll the RPC server for new blocks? True will force polling,
+    # null will poll if push notifications are disabled, and False will force
+    # off
+    #poll: null
+
+    # time between checking live rpc for new blocks... lower means less orphan
+    # blocks... Unused if not polling
+    #block_poll: 0.2
+
+    # what algorithm should these jobs be hashed with? options are x11, scrypt,
+    # scyptn
+    algo: scrypt
+
+    # a list of connections to daemons to get block templates from and submit
+    # complete blocks to
+    main_coinservs:
+        - port: 19332
+          address: localhost
+          username: litecoin
+          password: testing
+          # The preference for connecting to. Higher is a higher preference
+          poll_priority: 100  
+
+    # A list of coins that we'd like to merge mine. This is a list of
+    # dictionaries, so simply add another list item to merge mine multiple
+    # coins
+    merged:
+       - enabled: False
+         # the amount of time between pining the auxilury coinserv for new aux work
+         # work_interval: 1
+         # the unique name of the merged coin. used for indexing various
+         # information and logging
+         name: Parallax
+         # whether we clear all previous jobs to push new aux work
+         # flush: false
+         # should we send a celery task to record the block?
+         # send: true
+         # The signal to listen for for block notifications from daemon
+         # Recommended signals are CONT(18), URG(23), CHLD(17), and WINCH(28)
+         # as they normally won't kill processes that recieve them and don't
+         # handle them
+         # signal: null
+         # how we id the block type to celery
+         reporting_id: PLX
+         coinserv:
+             - port: 1234
+               address: 127.0.0.1
+               username:
+               password: 
+       - enabled: False
+         # the amount of time between pining the auxilury coinserv for new aux work
+         # work_interval: 1
+         # the unique name of the merged coin. used for indexing various
+         # information and logging
+         name: Monocle
+         # whether we clear all previous jobs to push new aux work
+         # flush: false
+         # should we send a celery task to record the block?
+         # send: true
+         # The signal to listen for for block notifications from daemon
+         # Recommended signals are CONT(18), URG(23), CHLD(17), and WINCH(28)
+         # as they normally won't kill processes that recieve them and don't
+         # handle them
+         # signal: null
+         # how we id the block type to celery
+         reporting_id: MON
+         coinserv:
+             - port: 1234
+               address: 127.0.0.1
+               username:
+               password: 
+
+    # Recommended signals are CONT(18), URG(23), and WINCH(28)
+    # as they normally won't kill processes that recieve them and don't
+    # handle them
+    #signal: null
+    # address that all blocks will go towards in escrow before sending to users
+    # CHANGE THIS
+    pool_address: ft4MqHvD1HQQVCxzNXn3N6fWCyybiGVEHd
+    # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
+    # sha...
+    #diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
+    #hashes_per_share: 0xFFFF
+    # server side size. synonymous with worker id
+    #extranonce_serv_size: 8
+    # size that clients will generate in bytes
+    #extranonce_size: 4
+
+    # time in seconds between generating a new block template
+    #job_refresh: 15
+
+    # how often we check to see if downed connections are back up
+    #rpc_ping_int: 2
+
+    # The number of hashes a single diff1 share takes on average to compute
+    # 0xFFFFFFFF for sha256 and dark diff, 0xFFFF for scrypt
+    #hashes_per_share: 0xFFFF  # scrypt diff
+
+# Reporter handles communication of new shares, block, etc for recording.
+reporter:
+    type: powerpool.reporter.CeleryReporter
+    # this defines the celery options that get passed to the daemon. this should
+    # define how to connect to the queue server, etc
+    #celery: 
+    #    CELERY_DEFAULT_QUEUE: celery
+    #celery_task_prefix: simplecoin.tasks
+    #share_batch_interval: 60
+    
+    # Controls whether or not we log oneminuteshares under the user "pool" or
+    # not
+    #report_pool_stats: true
+
+    # Trackers (share aggregation objects) are not directly tied to clients,
+    # so they just get removed after they've been empty for a while. Time in
+    # seconds for having them be cleaned up
+    #tracker_expiry_time=180
 
 # port and address to listen on for stratum server
-#stratum:
-#    port: 3333
-#    address: 0.0.0.0
+stratum:
+    interfaces:
+        - port: 3333
+          address: 0.0.0.0
+          # The difficulty to start people out when they connect. Will be the
+          # fixed difficulty if vardiff is disabled
+          start_difficulty: 128
+          # whether our this port will be vardiff enabled
+          vardiff: False
+        #- port: 3334
+        #  address: 0.0.0.0
+        #  # The difficulty to start people out when they connect. Will be the
+        #  # fixed difficulty if vardiff is disabled
+        #  start_difficulty: 256
+        #  # whether our this port will be vardiff enabled
+        #  vardiff: True
 
-# Merged mining configuration
-#merged:
-#   - enabled: False
-#     # the amount of time between pining the auxilury coinserv for new aux work
-#     # work_interval: 1
-#     # the unique name of the merged coin. used for indexing various
-#     # information and convenience
-#     name: mergie coin
-#     # whether we clear all previous jobs to push new aux work
-#     # flush: false
-#     # should we send a celery task to record the block?
-#     # send: true
-#     # The signal to listen for for block notifications from daemon
-#     # signal: null
-#     # how we id the block type to celery
-#     celery_id: true
-#     coinserv:
-#         - port: 1234
-#           address: 127.0.0.1
-#           username: ''
-#           password: ''
+    # This should be a list of valid "versions" for addresses. Each altcoin has
+    # a unique "version" number that can be checked. use
+    # cryptokit.base58.get_bcaddress_version to find out version number of an
+    # address. Null allows all versions.
+    valid_address_versions: [111]
+    #valid_address_versions: [71]  # allow vertcoin addresses
+    #valid_address_versions: [30]  # allow dogecoin addresses
+    #valid_address_versions: [30, 71]  # allow dogecoin and vertcoin addresses
+    #valid_address_versions: [111]  # most testnet addresses (btc, ltc)
 
-#vardiff:
-#    # should we use variable difficulty?
-#    enabled: False
-#    # the percentage that spm can be higher or lower without recomputing
-#    historesis: 1.5
-#    # the overal shares per minute we're targeting
-#    spm_target: 2.5
-#    # time between checks triggered from share submission in seconds
-#    interval: 400
-#    # the available share tiers
-#    tiers:
-#        - 8
-#        - 16
-#        - 32
-#        - 64
-#        - 96
-#        - 128
-#        - 192
-#        - 256
-#        - 512
+    # a valid address that invalid usernames will go towards. CHANGE THIS!
+    donate_address: fuqtPaygEci3oYr6TwFjJe7NHRGQ89a3Gm
 
-# server side size. synonymous with worker id
-#extranonce_serv_size: 8
-# size that clients will generate in bytes
-#extranonce_size: 4
-# what difficulty will the server start with? with no vardiff this is static
-# diff
-#start_difficulty: 128
-# time between sending latest job to workers when there is no new block
-#push_job_interval: 30
-# Toggles wheter new_block tasks get send to celery. If you're running multiple
-# powerpools then only one needs to do this
-#send_new_block: False
+    # Configuration that each vardiff enabled interface will use
+    vardiff:
+        # the overal shares per minute we're targeting
+        spm_target: 20.0
+        # time between checks triggered from share submission in seconds
+        interval: 30
+        # the available difficulty tiers. Will adjust to one of these
+        tiers:
+            - 8
+            - 16
+            - 32
+            - 64
+            - 96
+            - 128
+            - 192
+            - 256
+            - 512
 
-# time between checking live rpc for new blocks... lower means less stale
-# shares (in seconds)
-#block_poll: 0.2
-# block polls between generating a new job for workers (running gbt, etc)
-# time = block_poll * job_generate_int
-#job_generate_int: 75
-#rpc_ping_int: 2
-# The name of the powerpool process on the system. Useful for quickly
-# identifying pid with grep and ps
-#procname: powerpool
-# The amount of time the client will group shares into before transmitting to
-# clients
-#share_batch_interval: 90
+    # time between sending latest job to workers when there is no new block
+    push_job_interval: 45
 
-# aliases allow you to automatically translate a friendly username to to a
-# predefined address. the donate address is similar, except that any invalid
-# address is translated to it
-#aliases: {}
+    # the agent server allows data collection agents to connect and report
+    # stats about stratum clients. disabled by default. If enabled an agent
+    # server will be started to mirror every stratum port add `port_diff`
+    # higher port number (ie stratum port 3333 will create agent port 4444 by
+    # default)
+    #agent:
+    #    enabled: False
+    #    port_diff: 1111
+    #    accepted_types:
+    #       - temp
+    #       - status
+    #       - hashrate
+    #       - thresholds
 
-# a dictionary of configuration values for the stats server
+    # aliases allow you to automatically translate a friendly username to a
+    # predefined address. the donate address is similar, except that any
+    # invalid address is translated to it
+    #aliases: {}
+
+# The monitor is an builtin http server for viewing server health information
 # this dictionary gets pushed right to Flask. Address and port are 
 # used to configure the wsgi instance it starts
 #monitor:
 #    enabled: True
-#    DEBUG: False
+#    DEBUG: false
 #    address: 127.0.0.1
 #    port: 3855
-
-# the agent server allows data collection agents to connect and report stats
-# about stratum clients. disabled by default
-#agent:
-#    enabled: False
-#    binds:
-#        - address: 0.0.0.0
-#          port: 4444
-#    accepted_types:
-#       - temp
-#       - status
-#       - hashrate
-#       - thresholds
-
-# this defines the celery options that get passed to the daemon. this should
-# define how to connect to the queue server, etc
-#celery: 
-#    CELERY_DEFAULT_QUEUE: celery
-
-# Configures standard python loggers. type must be a logging handler provided
-# by python std lib. Future support for custom loggers would be great
-#loggers:
-#    - type: StreamHandler
-#      level: DEBUG

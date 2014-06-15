@@ -29,6 +29,7 @@ def main():
 
     # override those defaults with a loaded yaml config
     raw_config = yaml.load(args.config) or {}
+    raw_config.setdefault('powerpool', {})
 
     # check that config has a valid address
     server = PowerPool(raw_config, **raw_config['powerpool'])

@@ -24,7 +24,8 @@ class MonitorNetwork(Greenlet):
 
     def _set_config(self, **kwargs):
         # A fast way to set defaults for the kwargs then set them as attributes
-        self.config = dict(coinserv=None, extranonce_serv_size=8,
+        self.config = dict(coinserv=None,
+                           extranonce_serv_size=8,
                            extranonce_size=4,
                            diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
                            hashes_per_share=0xFFFF,
@@ -32,7 +33,7 @@ class MonitorNetwork(Greenlet):
                            block_poll=0.2,
                            job_refresh=15,
                            rpc_ping_int=2,
-                           pow_func='ltc_scrypt',
+                           poll=None,
                            pool_address='',
                            signal=None)
         self.config.update(kwargs)
@@ -250,7 +251,7 @@ class MonitorNetwork(Greenlet):
             for conn in self._down_connections:
                 try:
                     conn.getinfo()
-                except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException):
+                except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException, ValueError):
                     self.logger.info("RPC connection {} still down!".format(conn.name))
                     continue
 
@@ -293,7 +294,7 @@ class MonitorNetwork(Greenlet):
         self.logger.info("Network monitoring jobmanager starting up...")
         # start watching our nodes to see if they're up or not
         self._node_monitor = spawn(self._monitor_nodes)
-        if not self.config['signal']:
+        if (not self.config['signal'] and self.config['poll'] is None) or self.config['poll']:
             self.logger.info("No push block notif signal defined, polling RPC "
                              "server every {} seconds".format(self.config['block_poll']))
             self._height_poller = spawn(self._poll_height)

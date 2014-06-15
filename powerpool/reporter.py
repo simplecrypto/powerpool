@@ -35,7 +35,7 @@ class CeleryReporter(Greenlet):
     one_sec_stats = ['queued']
 
     def _set_config(self, **config):
-        self.config = dict(celery_task_prefix=None,
+        self.config = dict(celery_task_prefix='simplecoin.tasks',
                            celery={'CELERY_DEFAULT_QUEUE': 'celery'},
                            report_pool_stats=True,
                            share_batch_interval=60,
@@ -49,8 +49,8 @@ class CeleryReporter(Greenlet):
 
     def __init__(self, server, **config):
         Greenlet.__init__(self)
-        self._set_config(**config)
         self.logger = server.register_logger('reporter')
+        self._set_config(**config)
 
         # setup our celery agent and monkey patch
         self.celery = Celery()
@@ -68,8 +68,8 @@ class CeleryReporter(Greenlet):
     @property
     def status(self):
         dct = dict(queue_size=self.queue.qsize(),
-                    addresses_count=len(self.addresses),
-                    workers_count=len(self.workers))
+                   addresses_count=len(self.addresses),
+                   workers_count=len(self.workers))
         dct.update({key: self.server[key].summary()
                     for key in self.one_min_stats + self.one_sec_stats})
         return dct
@@ -137,6 +137,7 @@ class CeleryReporter(Greenlet):
             tracker.report()
             # if the last log time was more than expiry time ago...
             if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                assert tracker.unreported == 0
                 del self.addresses[address]
 
         self.logger.info("Shares reported (queued) in {}"
@@ -152,6 +153,7 @@ class CeleryReporter(Greenlet):
             tracker.report(upper)
             # if the last log time was more than expiry time ago...
             if (tracker.last_log + self.config['tracker_expiry_time']) < t:
+                assert sum(tracker.slices.itervalues()) == 0
                 del self.workers[worker_addr]
         self.logger.info("One minute shares reported (queued) in {}"
                          .format(time_format(time.time() - t)))
