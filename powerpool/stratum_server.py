@@ -458,7 +458,7 @@ class StratumClient(GenericClient):
         try:
             job = self.jobmanager.jobs[jobid]
         except KeyError:
-            self.send_error(self.STALE_SHARE_ERR)
+            self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_stale'].incr(difficulty)
             self.server['reject_stale_shares'].incr()
             return self.LOW_DIFF, difficulty
@@ -477,7 +477,7 @@ class StratumClient(GenericClient):
         if share in job.acc_shares:
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
-            self.send_error(self.DUP_SHARE_ERR)
+            self.send_error(self.DUP_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_dup'].incr(difficulty)
             self.server['reject_dup_shares'].incr()
             return self.DUP_SHARE, difficulty
@@ -487,13 +487,13 @@ class StratumClient(GenericClient):
         if hash_int >= job_target:
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
-            self.send_error(self.LOW_DIFF_ERR)
+            self.send_error(self.LOW_DIFF_ERR, id_val=self.msg_id)
             self.server['reject_low'].incr(difficulty)
             self.server['reject_low_shares'].incr()
             return self.LOW_DIFF, difficulty
 
         # we want to send an ack ASAP, so do it here
-        self.send_success(self.msg_id)
+        self.send_success(id_val=self.msg_id)
         self.logger.debug("Valid share accepted from worker {}.{}!"
                           .format(self.address, self.worker))
         # Add the share to the accepted set to check for dups
