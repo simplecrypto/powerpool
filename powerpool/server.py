@@ -26,6 +26,10 @@ class GenericClient(object):
             worker = parsed_w[:16]
         try:
             version = get_bcaddress_version(username)
+            # Confirm that it's a valid version
+            if (self.manager_config['valid_address_versions'] and
+                    version not in self.manager_config['valid_address_versions']):
+                version = False
         except Exception:
             version = False
 
