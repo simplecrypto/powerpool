@@ -133,14 +133,12 @@ class StratumManager(object):
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
                    address_worker_count=len(self.address_lut),
-                   client_count_authed=self.auth_count)
+                   client_count_authed=self.authed_clients,
+                   client_count_active=len(self.clients) - self.idle_clients,
+                   client_count_idle=self.idle_clients)
         dct.update({key: self.server[key].summary()
                     for key in self.one_min_stats + self.one_sec_stats})
         return dct
-
-    @property
-    def auth_count(self):
-        return sum([len(a) for a in self.address_lut.itervalues()])
 
     def set_conn(self, client):
         """ Called when a new connection is recieved by stratum """
@@ -291,6 +289,8 @@ class StratumClient(GenericClient):
         # last time we sent graphing data to the server
         self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
         self.last_share_submit = time.time()
+        self.last_job_push = time.time()
+        self.last_job_id = None
         self.last_diff_adj = time.time() - self.time_seed
         self.difficulty = self.config['start_difficulty']
         # the next diff to be used by push job
@@ -355,27 +355,6 @@ class StratumClient(GenericClient):
                     peer_name=self.peer_name[0],
                     connection_time=self.connection_time_dt)
 
-    # watch for new work announcements and push accordingly
-    def new_work_call(self, event):
-        """ An event triggered by the network monitor when it learns of a
-        new work on an aux chain. """
-        self.logger.info("Signaling new work for client {}.{}"
-                         .format(self.address, self.worker))
-        # only push jobs to authed workers...
-        if self.authenticated is True:
-            self.push_job()
-
-    # watch for new block announcements and push accordingly
-    def new_block_call(self, event):
-        """ An event triggered by the network monitor when it learns of a
-        new block on the network. All old work is now useless so must be
-        flushed. """
-        self.logger.info("Signaling new block for client {}.{}"
-                         .format(self.address, self.worker))
-        # only push jobs to authed workers...
-        if self.authenticated is True:
-            self.push_job(flush=True)
-
     def send_error(self, num=20, id_val=1):
         """ Utility for transmitting an error to the client """
         err = {'id': id_val,
@@ -400,7 +379,7 @@ class StratumClient(GenericClient):
                 'method': 'mining.set_difficulty'}
         self.write_queue.put(json.dumps(send, separators=(',', ':')) + "\n")
 
-    def push_job(self, flush=False):
+    def push_job(self, flush=False, timeout=False):
         """ Pushes the latest job down to the client. Flush is whether
         or not he should dump his previous jobs or not. Dump will occur
         when a new block is found since work on the old block is
@@ -413,7 +392,12 @@ class StratumClient(GenericClient):
                 break
             except KeyError:
                 self.logger.warn("No jobs available for worker!")
-                sleep(0.5)
+                sleep(0.1)
+
+        if self.last_job_id == job.job_id and not timeout:
+            self.logger.info("Ignoring non timeout resend of job id {} to worker {}.{}"
+                             .format(job.job_id, self.address, self.worker))
+            return
 
         # we push the next difficulty here instead of in the vardiff block to
         # prevent a potential mismatch between client and server
@@ -423,12 +407,16 @@ class StratumClient(GenericClient):
             self.difficulty = self.next_diff
             self.push_difficulty()
 
-        self.logger.info("Sending job id {} to worker {}.{}"
-                         .format(job.job_id, self.address, self.worker))
+        self.logger.info("Sending job id {} to worker {}.{}{}"
+                         .format(job.job_id, self.address, self.worker,
+                                 " after timeout" if timeout else ''))
 
         self._push(job)
 
     def _push(self, job, flush=False):
+        self.last_job_id = job.job_id
+        self.last_job_push = time.time()
+        # get client local job id to map current difficulty
         self.job_counter += 1
         job_id = str(self.job_counter)
         self.job_mapper[job_id] = (self.difficulty, job.job_id)
@@ -609,7 +597,7 @@ class StratumClient(GenericClient):
                 self.logger.debug("Read loop encountered flag from write, exiting")
                 break
 
-            line = with_timeout(self.manager_config['push_job_interval'] - self.time_seed,
+            line = with_timeout(time.time() - self.last_job_push + self.manager_config['push_job_interval'] - self.time_seed,
                                 self.fp.readline,
                                 timeout_value='timeout')
 
@@ -619,12 +607,16 @@ class StratumClient(GenericClient):
                     self.idle = True
                     self.stratum_manager.idle_clients += 1
 
-                if self.authenticated is True:
+                if (self.authenticated is True and  # don't send to non-authed
+                    # force send if we need to push a new difficulty
+                    (self.next_diff != self.difficulty or
+                     # send if we're past the push interval
+                     time.time() > (self.last_job_push +
+                                    self.manager_config['push_job_interval'] -
+                                    self.time_seed))):
                     if self.config['vardiff']:
                         self.recalc_vardiff()
-                    self.logger.info("Pushing new job to client {}.{} after timeout"
-                                     .format(self.address, self.worker))
-                    self.push_job()
+                    self.push_job(timeout=True)
                 continue
 
             line = line.strip()

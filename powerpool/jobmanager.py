@@ -379,12 +379,6 @@ class MonitorNetwork(Greenlet):
             dirty = True
 
         if new_block or dirty:
-
-            self.logger.info("Generating new block template with {} trans. Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}."
-                             .format(len(self._last_gbt['transactions']),
-                                     bits_to_difficulty(self._last_gbt['bits']),
-                                     self._last_gbt['coinbasevalue'] / 100000000.0,
-                                     self._last_gbt['height']))
             # generate a new job and push it if there's a new block on the
             # network
             self.generate_job(push=new_block, flush=new_block, new_block=new_block)
@@ -421,6 +415,15 @@ class MonitorNetwork(Greenlet):
         else:
             merged_data = {}
             mm_data = None
+
+        self.logger.info("Generating new block template with {} trans. "
+                         "Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}. "
+                         "Merged chains: {}"
+                         .format(len(self._last_gbt['transactions']),
+                                 bits_to_difficulty(self._last_gbt['bits']),
+                                 self._last_gbt['coinbasevalue'] / 100000000.0,
+                                 self._last_gbt['height'],
+                                 ', '.join(merged_data.keys())))
 
         # here we recalculate the current merkle branch and partial
         # coinbases for passing to the mining clients
