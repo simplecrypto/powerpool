@@ -6,6 +6,7 @@ import gevent
 import signal
 import time
 import sys
+import subprocess
 
 from gevent import spawn, sleep
 from gevent.monkey import patch_all
@@ -17,6 +18,7 @@ from pprint import pformat
 from .stratum_server import StratumManager
 from .monitor import MonitorWSGI, MinuteStatManager, SecondStatManager
 from .utils import import_helper
+import powerpool
 
 
 def main():
@@ -63,6 +65,20 @@ class PowerPool(object):
         setproctitle.setproctitle(procname)
         self.term_timeout = term_timeout
         self.raw_config = raw_config
+        self.version = powerpool.__version__
+        self.version_info = powerpool.__version_info__
+        self.sha = getattr(powerpool, '__sha__', "unknown")
+        self.rev_date = getattr(powerpool, '__rev_date__', "unknown")
+        if self.sha == "unknown":
+            # try and fetch the git version information
+            try:
+                output = subprocess.check_output("git show -s --format='%ci %h'",
+                                                shell=True).strip().rsplit(" ", 1)
+                self.sha = output[1]
+                self.rev_date = output[0]
+            # celery won't work with this, so set some default
+            except Exception as e:
+                self.logger.info("Unable to fetch git hash info: {}".format(e))
 
         # bookkeeping for things to request exit from at exit time
         # A list of all the greenlets that are running
@@ -84,23 +100,11 @@ class PowerPool(object):
         # Stats tracking for the whole server
         #####
         self.server_start = datetime.datetime.utcnow()
-        onemin_stat_keys = ['reject_low', 'reject_dup', 'reject_stale',
-                            'stratum_connects', 'stratum_disconnects',
-                            'agent_connects', 'agent_disconnects']
-        onesec_stat_keys = ['shares']
 
         # Setup all our stat managers
         self.min_stat_counters = []
         self.sec_stat_counters = []
-        for key in onemin_stat_keys:
-            new = MinuteStatManager()
-            setattr(self, key, new)
-            self.min_stat_counters.append(new)
-
-        for key in onesec_stat_keys:
-            new = SecondStatManager()
-            setattr(self, key, new)
-            self.sec_stat_counters.append(new)
+        self.stat_counters = {}
 
     def register_logger(self, name):
         logger = logging.getLogger(name)
@@ -111,6 +115,26 @@ class PowerPool(object):
                 logger.setLevel(logging.DEBUG)
 
         return logger
+
+    def register_stat_counters(self, min_counters, sec_counters=None):
+        for key in min_counters:
+            if key in self.stat_counters:
+                raise ValueError("{} stat counter key has already been registered!"
+                                 .format(key))
+            new = MinuteStatManager()
+            self.stat_counters[key] = new
+            self.min_stat_counters.append(new)
+
+        for key in sec_counters or []:
+            if key in self.stat_counters:
+                raise ValueError("{} stat counter key has already been registered!"
+                                 .format(key))
+            new = SecondStatManager()
+            self.stat_counters[key] = new
+            self.sec_stat_counters.append(new)
+
+    def __getitem__(self, key):
+        return self.stat_counters[key]
 
     def run(self):
         # Start the main chain network monitor and aux chain monitors
@@ -164,15 +188,15 @@ class PowerPool(object):
             if gevent.wait(timeout=self.term_timeout):
                 self.logger.info("All threads exited normally")
             else:
+                self.logger.info("Timeout reached, shutting down forcefully")
                 from greenlet import greenlet
                 import gc
-                import traceback
                 for ob in gc.get_objects():
                     if not isinstance(ob, greenlet):
                         continue
                     if not ob:
                         continue
-                    self.logger.error(''.join(traceback.format_stack(ob.gr_frame)))
+                    self.logger.error(ob._run.__name__)
                 self.logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
             self.logger.info("Shutdown requested again by system, "
@@ -187,32 +211,15 @@ class PowerPool(object):
         self._exit_signal.set()
 
     @property
-    def share_percs(self):
-        acc_tot = self.shares.total or 1
-        low_tot = self.reject_low.total
-        dup_tot = self.reject_dup.total
-        stale_tot = self.reject_stale.total
-        return dict(
-            low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
-            stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
-            dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
-        )
-
-    @property
     def status(self):
-        return dict(stratum_connects=self.stratum_connects.summary(),
-                    stratum_disconnects=self.stratum_disconnects.summary(),
-                    agent_connects=self.agent_connects.summary(),
-                    agent_disconnects=self.agent_disconnects.summary(),
-                    shares=self.shares.summary(),
-                    reject_low=self.reject_low.summary(),
-                    reject_stale=self.reject_stale.summary(),
-                    reject_dup=self.reject_dup.summary(),
-                    share_percs=self.share_percs,
-                    mhps=(self.jobmanager.config['hashes_per_share'] *
-                          self.shares.minute / 1000000 / 60.0),
-                    uptime=str(datetime.datetime.utcnow() - self.server_start),
-                    server_start=str(self.server_start))
+        return dict(uptime=str(datetime.datetime.utcnow() - self.server_start),
+                    server_start=str(self.server_start),
+                    version=dict(
+                        version=self.version,
+                        version_info=self.version_info,
+                        sha=self.sha,
+                        rev_date=self.rev_date)
+                    )
 
     def tick_stats(self):
         try:

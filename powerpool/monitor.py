@@ -69,6 +69,9 @@ class MonitorWSGI(WSGIServer):
         app.stratum_manager = server.stratum_manager
         WSGIServer.__init__(self, (address, port), app, log=Logger())
 
+    def stop(self, *args, **kwargs):
+        self.application.real_logger.info("Stopping monitoring server")
+        WSGIServer.stop(self, *args, **kwargs)
 
 def jsonize(item):
     if isinstance(item, dict):
@@ -185,6 +188,7 @@ class SecondStatManager(object):
     def minute(self):
         if len(self.mins):
             return self.mins[0]
+        return 0
 
     @property
     def second_avg(self):

@@ -41,7 +41,7 @@ class AgentServer(GenericServer):
 
     def handle(self, sock, address):
         self.id_count += 1
-        self.server.agent_connects.incr()
+        self.server['agent_connects'].incr()
         AgentClient(sock, address, self.id_count, self.server)
 
 
@@ -89,12 +89,11 @@ class AgentClient(GenericClient):
         self._connection_time = time()
         self._id = id_count
 
-        self.agent_clients[self._id] = self
-
         # where we put all the messages that need to go out
         self._write_queue = Queue()
 
         try:
+            self.agent_clients[self._id] = self
             write_greenlet = spawn(self.write_loop)
             self.read_loop()
         except socket.error:
@@ -112,7 +111,7 @@ class AgentClient(GenericClient):
                 self.sock.close()
             except socket.error:
                 pass
-            self.server.agent_disconnects.incr()
+            self.server['agent_disconnects'].incr()
             if self.client_state:
                 try:
                     del self.agent_clients[self._id]

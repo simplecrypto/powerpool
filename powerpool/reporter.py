@@ -31,6 +31,9 @@ class NoopReporter(Greenlet):
 
 
 class CeleryReporter(Greenlet):
+    one_min_stats = []
+    one_sec_stats = ['queued']
+
     def _set_config(self, **config):
         self.config = dict(celery_task_prefix=None,
                            celery={'CELERY_DEFAULT_QUEUE': 'celery'},
@@ -55,34 +58,44 @@ class CeleryReporter(Greenlet):
 
         self.share_reporter = None
 
+        self.server = server
+        self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
+
         self.queue = Queue()
         self.addresses = {}
         self.workers = {}
 
     @property
     def status(self):
-        return dict(queue_size=self.queue.qsize(),
+        dct = dict(queue_size=self.queue.qsize(),
                     addresses_count=len(self.addresses),
                     workers_count=len(self.workers))
+        dct.update({key: self.server[key].summary()
+                    for key in self.one_min_stats + self.one_sec_stats})
+        return dct
 
     # Remote methods to send information to other servers
     ########################
     def add_one_minute(self, *args, **kwargs):
+        self.server['queued'].incr()
         self.queue.put(("add_one_minute", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
                          .format("add_one_minute", args))
 
     def add_share(self, *args, **kwargs):
+        self.server['queued'].incr()
         self.queue.put(("add_share", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
                          .format("add_shares", args))
 
     def agent_send(self, *args, **kwargs):
+        self.server['queued'].incr()
         self.queue.put(("agent_send", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
                          .format("agent_send", args))
 
     def add_block(self, *args, **kwargs):
+        self.server['queued'].incr()
         self.queue.put(("add_block", args, kwargs))
         self.logger.info("Calling celery task {} with {}"
                          .format("transmit_block", args))
