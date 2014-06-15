@@ -36,11 +36,11 @@ class GenericClient(object):
             self.logger.debug(
                 "Invalid address passed in, checking aliases against {}"
                 .format(filtered))
-            if filtered in self.config['aliases']:
-                address = self.config['aliases'][filtered]
+            if filtered in self.manager_config['aliases']:
+                address = self.manager_config['aliases'][filtered]
                 self.logger.debug("Setting address alias to {}".format(address))
             else:
-                address = self.config['donate_address']
+                address = self.manager_config['donate_address']
                 self.logger.debug("Falling back to donate address {}".format(address))
 
         return address, worker

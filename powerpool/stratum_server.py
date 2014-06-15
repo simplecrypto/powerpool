@@ -7,6 +7,7 @@ import time
 
 from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
+from cryptokit.base58 import get_bcaddress_version
 from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
 from gevent.queue import Queue
@@ -37,11 +38,17 @@ class StratumManager(object):
                                         interval=30,
                                         tiers=[8, 16, 32, 64, 96, 128, 192, 256, 512]),
                            push_job_interval=30,
+                           donate_address='',
+                           idle_worker_threshold=300,
                            agent=dict(enabled=False,
                                       port_diff=1111,
                                       timeout=120,
                                       accepted_types=['temp', 'status', 'hashrate', 'thresholds']))
         recursive_update(self.config, config)
+
+        if not get_bcaddress_version(self.config['donate_address']):
+            self.logger.error("No valid donation address configured! Exiting.")
+            exit()
 
     def __init__(self, server, **config):
         self.server = server
@@ -57,6 +64,8 @@ class StratumManager(object):
         self.address_worker_lut = {}
         self.stratum_servers = []
         self.agent_servers = []
+        self.authed_clients = 0
+        self.idle_clients = 0
 
         self.server = server
         self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
@@ -264,6 +273,7 @@ class StratumClient(GenericClient):
         self._disconnected = False
         self.authenticated = False
         self.subscribed = False
+        self.idle = False
         self.address = None
         self.worker = None
         # the worker id. this is also extranonce 1
@@ -280,7 +290,7 @@ class StratumClient(GenericClient):
         self.job_counter = 0
         # last time we sent graphing data to the server
         self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
-        self.last_graph_transmit = time.time() - self.time_seed
+        self.last_share_submit = time.time()
         self.last_diff_adj = time.time() - self.time_seed
         self.difficulty = self.config['start_difficulty']
         # the next diff to be used by push job
@@ -304,6 +314,12 @@ class StratumClient(GenericClient):
         except Exception:
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
+            if self.authenticated:
+                self.stratum_manager.authed_clients -= 1
+
+            if self.idle:
+                self.stratum_manager.idle_clients -= 1
+
             if write_greenlet:
                 write_greenlet.kill()
 
@@ -334,6 +350,7 @@ class StratumClient(GenericClient):
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
+                    idle=self.idle,
                     address=self.address,
                     peer_name=self.peer_name[0],
                     connection_time=self.connection_time_dt)
@@ -423,13 +440,20 @@ class StratumClient(GenericClient):
         params = data['params']
         # [worker_name, job_id, extranonce2, ntime, nonce]
         # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
-        self.logger.debug(
-            "Recieved work submit:\n\tworker_name: {0}\n\t"
-            "job_id: {1}\n\textranonce2: {2}\n\t"
-            "ntime: {3}\n\tnonce: {4} ({int_nonce})"
-            .format(
-                *params,
-                int_nonce=struct.unpack(str("<L"), unhexlify(params[4]))))
+        if __debug__:
+            self.logger.debug(
+                "Recieved work submit:\n\tworker_name: {0}\n\t"
+                "job_id: {1}\n\textranonce2: {2}\n\t"
+                "ntime: {3}\n\tnonce: {4} ({int_nonce})"
+                .format(
+                    *params,
+                    int_nonce=struct.unpack(str("<L"), unhexlify(params[4]))))
+
+        if self.idle:
+            self.idle = False
+            self.stratum_manager.idle_clients -= 1
+
+        self.last_share_submit = time.time()
 
         try:
             difficulty, jobid = self.job_mapper[data['params'][1]]
@@ -534,6 +558,7 @@ class StratumClient(GenericClient):
         self.address, self.worker = user_worker
         self.stratum_manager.set_user(self)
         self.authenticated = True
+        self.stratum_manager.authed_clients += 1
         self.send_success(self.msg_id)
         self.push_difficulty()
         self.push_job()
@@ -590,6 +615,10 @@ class StratumClient(GenericClient):
 
             # push a new job every timeout seconds if requested
             if line == 'timeout':
+                if (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
+                    self.idle = True
+                    self.stratum_manager.idle_clients += 1
+
                 if self.authenticated is True:
                     if self.config['vardiff']:
                         self.recalc_vardiff()

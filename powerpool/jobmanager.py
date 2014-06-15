@@ -33,14 +33,12 @@ class MonitorNetwork(Greenlet):
                            job_refresh=15,
                            rpc_ping_int=2,
                            pow_func='ltc_scrypt',
-                           pool_address=None,
-                           donate_address=None,
+                           pool_address='',
                            signal=None)
         self.config.update(kwargs)
 
-        if (not get_bcaddress_version(self.config['pool_address']) or
-                not get_bcaddress_version(self.config['donate_address'])):
-            self.logger.error("No valid donation/pool address configured! Exiting.")
+        if not get_bcaddress_version(self.config['pool_address']):
+            self.logger.error("No valid pool address configured! Exiting.")
             exit()
 
         # check that we have at least one configured coin server
@@ -148,11 +146,10 @@ class MonitorNetwork(Greenlet):
                 retries += 1
                 res = "failed"
                 try:
-                    res = conn.getblocktemplate({'mode': 'submit',
-                                                 'data': block})
+                    res = conn.getblocktemplate({'mode': 'submit', 'data': block})
                 except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.info("Block failed to submit to the server {} with submitblock!"
-                                     .format(conn.name))
+                    self.logger.info("Block failed to submit to the server {} with submitblock! {}"
+                                     .format(conn.name, e))
                     if getattr(e, 'error', {}).get('code', 0) != -8:
                         self.logger.error(getattr(e, 'error'), exc_info=True)
                     try:
@@ -558,7 +555,8 @@ class MonitorAuxChain(Greenlet):
     def found_block(self, address, worker, hash_hex, header, coinbase_raw, job):
         aux_data = job.merged_data[self.config['name']]
         self.block_stats['solves'] += 1
-        self.logger.log(36, "New {} Aux Block identified!".format(self.config['name']))
+        self.logger.info("New {} Aux block at height {} with hash {}"
+                         .format(self.config['name'], aux_data['height'], hash_hex))
         aux_block = (
             pack.IntType(256, 'big').pack(aux_data['hash']).encode('hex'),
             bitcoin_data.aux_pow_type.pack(dict(

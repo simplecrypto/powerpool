@@ -77,6 +77,7 @@ class AgentClient(GenericClient):
         # convenient access to global state
         self.server = server
         self.config = server.config
+        self.manager_config = server.stratum_manager.config
         self.stratum_clients = server.stratum_clients
         self.agent_clients = server.agent_clients
         self.celery = server.celery
