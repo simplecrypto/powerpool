@@ -510,8 +510,8 @@ class MonitorAuxChain(Greenlet):
             exit()
 
         # check that we have at least one configured coin server
-        if not self.config['coin_id']:
-            self.logger.error("Merge mined coins must have an coin_id")
+        if not self.config['name'] or not self.config['reporting_id']:
+            self.logger.error("Merge mined coins must have an reporting_id and name")
             exit()
 
     def __init__(self, server, jobmanager, **config):
@@ -623,7 +623,7 @@ class MonitorAuxChain(Greenlet):
                         -1,
                         "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
                         hsh,
-                        merged=self.config['coin_id'],
+                        merged=self.config['reporting_id'],
                         worker=worker)
 
                 break  # break retry loop if success
