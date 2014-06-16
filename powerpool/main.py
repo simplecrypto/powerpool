@@ -190,15 +190,6 @@ class PowerPool(object):
                 self.logger.info("All threads exited normally")
             else:
                 self.logger.info("Timeout reached, shutting down forcefully")
-                from greenlet import greenlet
-                import gc
-                for ob in gc.get_objects():
-                    if not isinstance(ob, greenlet):
-                        continue
-                    if not ob:
-                        continue
-                    self.logger.error(ob._run.__name__)
-                self.logger.info("Timeout reached, shutting down forcefully")
         except KeyboardInterrupt:
             self.logger.info("Shutdown requested again by system, "
                              "exiting without cleanup")
