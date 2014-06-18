@@ -225,6 +225,9 @@ class MonitorNetwork(Greenlet):
     def down_connection(self, conn):
         """ Called when a connection goes down. Removes if from the list of
         live connections and recomputes a new. """
+        if not conn:
+            logger.warn("Tried to down a NoneType connection")
+            return
         if conn in self.live_connections:
             self.live_connections.remove(conn)
 
@@ -498,6 +501,7 @@ class MonitorAuxChain(Greenlet):
         # A fast way to set defaults for the kwargs then set them as attributes
         self.config = dict(enabled=False,
                            name=None,
+                           work_interval=1,
                            signal=None,
                            coinserv=[],
                            flush=False,
@@ -679,6 +683,8 @@ class MonitorAuxChain(Greenlet):
                 self.jobmanager.generate_job()
                 self.server[self.prefix + "new_jobs"].incr()
 
+        return True
+
     @property
     def status(self):
         dct = dict(block_stats=self.block_stats,
@@ -704,4 +710,4 @@ class MonitorAuxChain(Greenlet):
                 continue
 
             # repeat this on an interval
-            sleep(self.work_interval)
+            sleep(self.config['work_interval'])
