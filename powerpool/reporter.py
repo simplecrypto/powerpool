@@ -120,7 +120,10 @@ class CeleryReporter(Greenlet):
         """ Repeatedly do our share reporting on an interval """
         while True:
             sleep(self.config['share_batch_interval'])
-            self._report_shares()
+            try:
+                self._report_shares()
+            except Exception:
+                self.logger.error("Unhandled error in report shares", exc_info=True)
 
     def _report_shares(self, flush=False):
         """ Goes through our internal aggregated share data structures and
