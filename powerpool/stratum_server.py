@@ -234,7 +234,6 @@ class StratumClient(GenericClient):
     STALE_SHARE_ERR = 21
     LOW_DIFF_ERR = 23
     DUP_SHARE_ERR = 22
-    STALE_SHARE_ERR = 21
 
     # constansts for share submission outcomes. returned by the share checker
     BLOCK_FOUND = 0
@@ -448,7 +447,7 @@ class StratumClient(GenericClient):
         except KeyError:
             # since we can't identify the diff we just have to assume it's
             # current diff
-            self.send_error(self.STALE_SHARE_ERR)
+            self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_stale'].incr(self.difficulty)
             self.server['reject_stale_shares'].incr()
             return self.STALE_SHARE, self.difficulty
