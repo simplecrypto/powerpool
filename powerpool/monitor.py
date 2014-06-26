@@ -121,7 +121,7 @@ def debug():
 
 @main.route('/')
 def general():
-    return jsonify(stratum_manger=stratum_manager.status,
+    return jsonify(stratum_manager=stratum_manager.status,
                    reporter=reporter.status,
                    jobmanager=jobmanager.status,
                    server=server.status)
