@@ -499,6 +499,7 @@ class MonitorNetwork(Greenlet):
             hex_bits = hexlify(bt_obj.bits)
             self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
             self.current_net['subsidy'] = bt_obj.total_value
+            self.current_net['height'] = bt_obj.block_height
             self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
             self.current_net['transactions'] = len(bt_obj.transactions)
 
@@ -651,6 +652,10 @@ class MonitorAuxChain(Greenlet):
             sleep(1)
         else:
             self.block_stats['rejects'] += 1
+
+        self.block_stats['last_solve_height'] = aux_data['height'] + 1
+        self.block_stats['last_solve_worker'] = "{}.{}".format(address, worker)
+        self.block_stats['last_solve_time'] = datetime.datetime.utcnow()
 
     def update(self, reason=None):
         if reason:

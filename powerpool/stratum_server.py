@@ -607,7 +607,7 @@ class StratumClient(GenericClient):
 
             # push a new job every timeout seconds if requested
             if line == 'timeout':
-                if (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
+                if not self.idle and (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
                     self.idle = True
                     self.stratum_manager.idle_clients += 1
 
@@ -630,7 +630,7 @@ class StratumClient(GenericClient):
                 try:
                     data = json.loads(line)
                 except ValueError:
-                    self.logger.warn("Data {} not JSON".format(line))
+                    self.logger.warn("Data {}.. not JSON".format(line[:15]))
                     self.send_error()
                     continue
             else:
