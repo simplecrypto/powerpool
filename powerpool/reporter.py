@@ -136,7 +136,7 @@ class CeleryReporter(Greenlet):
         self.logger.info("Reporting shares for {:,} users"
                          .format(len(self.addresses)))
         t = time.time()
-        for address, tracker in self.addresses.iteritems():
+        for address, tracker in self.addresses.items():
             tracker.report()
             # if the last log time was more than expiry time ago...
             if (tracker.last_log + self.config['tracker_expiry_time']) < t:
