@@ -187,7 +187,7 @@ class SecondStatManager(object):
     @property
     def minute(self):
         if len(self.mins):
-            return self.mins[0]
+            return self.mins[-1]
         return 0
 
     @property

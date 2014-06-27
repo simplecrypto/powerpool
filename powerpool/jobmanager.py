@@ -4,6 +4,7 @@ import urllib3
 import gevent
 import socket
 import time
+import datetime
 
 from future.utils import viewitems
 from binascii import unhexlify, hexlify
@@ -20,7 +21,7 @@ from .utils import time_format
 
 
 class MonitorNetwork(Greenlet):
-    one_min_stats = ['work_restarts', 'new_jobs']
+    one_min_stats = ['work_restarts', 'new_jobs', 'work_pushes']
 
     def _set_config(self, **kwargs):
         # A fast way to set defaults for the kwargs then set them as attributes
@@ -79,6 +80,8 @@ class MonitorNetwork(Greenlet):
         # general current network stats
         self.current_net = dict(difficulty=None,
                                 height=None,
+                                prev_hash=None,
+                                transactions=None,
                                 subsidy=None)
         self.block_stats = dict(accepts=0,
                                 rejects=0,
@@ -134,12 +137,9 @@ class MonitorNetwork(Greenlet):
         job = self.jobs[job_id]
         self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
 
-    def found_block(self, address, worker, hash_hex, header, job_id):
+    def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id):
         job = self.jobs[job_id]
-        self.block_stats['solves'] += 1
-        self.block_stats['last_solves_height'] = job.block_height
-        self.block_stats['last_solves_worker'] = "{}.{}".format(address, worker)
-        block = hexlify(job.submit_serial(header))
+        block = hexlify(job.submit_serial(header, raw_coinbase=raw_coinbase))
 
         def submit_block(conn):
             retries = 0
@@ -174,7 +174,6 @@ class MonitorNetwork(Greenlet):
                         worker=worker)
                     self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
                                      .format(conn.name))
-                    self.block_stats['last_solve_time'] = int(time.time())
                     break  # break retry loop if success
                 else:
                     self.logger.error(
@@ -207,6 +206,12 @@ class MonitorNetwork(Greenlet):
                          .format(job.block_height,
                                  hash_hex,
                                  job.total_value))
+
+        self.block_stats['solves'] += 1
+        self.block_stats['last_solve_height'] = job.block_height
+        self.block_stats['last_solve_worker'] = "{}.{}".format(address, worker)
+        self.block_stats['last_solve_time'] = datetime.datetime.utcnow()
+
         if __debug__:
             self.logger.debug("New block hex dump:\n{}".format(block))
             self.logger.debug("Coinbase: {}".format(str(job.coinbase.to_dict())))
@@ -226,7 +231,7 @@ class MonitorNetwork(Greenlet):
         """ Called when a connection goes down. Removes if from the list of
         live connections and recomputes a new. """
         if not conn:
-            logger.warn("Tried to down a NoneType connection")
+            self.logger.warn("Tried to down a NoneType connection")
             return
         if conn in self.live_connections:
             self.live_connections.remove(conn)
@@ -478,16 +483,24 @@ class MonitorNetwork(Greenlet):
             for idx, client in viewitems(self.stratum_manager.clients):
                 try:
                     if client.authenticated:
-                        client._push(bt_obj)
+                        client._push(bt_obj, flush=flush)
                 except AttributeError:
                     pass
             self.logger.info("New job enqueued for transmission to {} users in {}"
                              .format(len(self.stratum_manager.clients),
                                      time_format(time.time() - t)))
+            if flush:
+                self.server['work_restarts'].incr()
+            self.server['work_pushes'].incr()
+
+        self.server['new_jobs'].incr()
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
             self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
+            self.current_net['subsidy'] = bt_obj.total_value
+            self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
+            self.current_net['transactions'] = len(bt_obj.transactions)
 
 
 class RPCException(Exception):
@@ -593,7 +606,6 @@ class MonitorAuxChain(Greenlet):
             if res is True:
                 self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(self.config['name']))
                 # Record it for the stats
-                self.block_stats['last_solve_time'] = int(time.time())
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
                     dict(height=new_height, timestamp=int(time.time())))

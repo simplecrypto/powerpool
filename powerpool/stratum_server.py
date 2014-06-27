@@ -517,7 +517,12 @@ class StratumClient(GenericClient):
         if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
-        self.jobmanager.found_block(self.address, self.worker, hash_hex, header, job.job_id)
+        self.jobmanager.found_block(job.coinbase.raw,
+                                    self.address,
+                                    self.worker,
+                                    hash_hex,
+                                    header,
+                                    job.job_id)
 
         return self.BLOCK_FOUND, difficulty
 
