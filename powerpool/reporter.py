@@ -152,7 +152,7 @@ class CeleryReporter(Greenlet):
             upper = t + 10
         else:
             upper = (t // 60) * 60
-        for worker_addr, tracker in self.workers.iteritems():
+        for worker_addr, tracker in self.workers.items():
             tracker.report(upper)
             # if the last log time was more than expiry time ago...
             if (tracker.last_log + self.config['tracker_expiry_time']) < t:

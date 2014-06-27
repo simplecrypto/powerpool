@@ -8,4 +8,4 @@ future==0.11.2
 Flask
 psutil
 setproctitle
-pyzeromq
+pyzmq
