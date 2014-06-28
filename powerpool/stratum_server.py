@@ -469,6 +469,7 @@ class StratumClient(GenericClient):
             extra1=self.id,
             extra2=params[2],
             ntime=params[3])
+        coinbase_raw = job.coinbase.raw
 
         # Check a submitted share against previous shares to eliminate
         # duplicates
@@ -510,14 +511,14 @@ class StratumClient(GenericClient):
                                                    hash_hex,
                                                    header,
                                                    job.job_id,
-                                                   job.coinbase.raw,
+                                                   coinbase_raw,
                                                    data['type'])
 
         # valid network hash?
         if hash_int > job.bits_target:
             return self.VALID_SHARE, difficulty
 
-        self.jobmanager.found_block(job.coinbase.raw,
+        self.jobmanager.found_block(coinbase_raw,
                                     self.address,
                                     self.worker,
                                     hash_hex,
