@@ -57,6 +57,7 @@ class StratumManager(object):
 
         # A dictionary of all connected clients indexed by id
         self.clients = {}
+        self.agent_clients = {}
         # A dictionary of lists of connected clients indexed by address
         self.address_lut = {}
         # A dictionary of lists of connected clients indexed by address and
@@ -71,7 +72,8 @@ class StratumManager(object):
         self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
 
         self.algos = {}
-        self.id_count = 0
+        self.stratum_id_count = 0
+        self.agent_id_count = 0
 
         try:
             from drk_hash import getPoWHash
@@ -105,7 +107,7 @@ class StratumManager(object):
         for cfg in self.config['interfaces']:
             # Start a corresponding agent server
             if self.config['agent']['enabled']:
-                serv = AgentServer(server, stratum_config=cfg, **self.config['agent'])
+                serv = AgentServer(server, self, stratum_config=cfg, **self.config['agent'])
                 self.agent_servers.append(serv)
                 serv.start()
 
@@ -130,6 +132,7 @@ class StratumManager(object):
         dct = dict(share_percs=self.share_percs,
                    mhps=(self.server.jobmanager.config['hashes_per_share'] *
                          self.server['valid'].minute / 1000000 / 60.0),
+                   agent_client_count=len(self.agent_clients),
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
                    address_worker_count=len(self.address_lut),
@@ -220,8 +223,8 @@ class StratumServer(GenericServer):
 
     def handle(self, sock, address):
         self.server['stratum_connects'].incr()
-        self.stratum_manager.id_count += 1
-        StratumClient(sock, address, self.stratum_manager.id_count, self.server, self)
+        self.stratum_manager.stratum_id_count += 1
+        StratumClient(sock, address, self.stratum_manager.stratum_id_count, self.server, self)
 
 
 class StratumClient(GenericClient):

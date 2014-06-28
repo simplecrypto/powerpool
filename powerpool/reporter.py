@@ -91,8 +91,6 @@ class CeleryReporter(Greenlet):
     def agent_send(self, *args, **kwargs):
         self.server['queued'].incr()
         self.queue.put(("agent_send", args, kwargs))
-        self.logger.info("Calling celery task {} with {}"
-                         .format("agent_send", args))
 
     def add_block(self, *args, **kwargs):
         self.server['queued'].incr()

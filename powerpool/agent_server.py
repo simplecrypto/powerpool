@@ -1,6 +1,5 @@
 import json
 import socket
-import logging
 
 from time import time
 from gevent.queue import Queue
@@ -19,15 +18,15 @@ class AgentServer(GenericServer):
         self.config['address'] = self.stratum_config['address']
         self.config['port'] = self.config['port_diff'] + self.stratum_config['port']
 
-    def __init__(self, server, stratum_config, **config):
+    def __init__(self, server, stratum_manager, stratum_config, **config):
         self.stratum_config = stratum_config
+        self.stratum_manager = stratum_manager
         self._set_config(**config)
-        self.logger = server.register_logger('stratum_server_{}'.
+        self.logger = server.register_logger('agent_server_{}'.
                                              format(self.config['port']))
         listener = (self.config['address'], self.config['port'])
         super(GenericServer, self).__init__(listener, spawn=Pool())
         self.server = server
-        self.id_count = 0
 
     def start(self, *args, **kwargs):
         self.logger.info("Agent server starting up on {address}:{port}"
@@ -40,14 +39,12 @@ class AgentServer(GenericServer):
         GenericServer.stop(self, *args, **kwargs)
 
     def handle(self, sock, address):
-        self.id_count += 1
+        self.stratum_manager.agent_id_count += 1
         self.server['agent_connects'].incr()
-        AgentClient(sock, address, self.id_count, self.server)
+        AgentClient(sock, address, self.stratum_manager.agent_id_count, self.server, self)
 
 
 class AgentClient(GenericClient):
-    logger = logging.getLogger('agent')
-
     errors = {
         20: 'Other/Unknown',
         25: 'Not subscribed',
@@ -60,7 +57,8 @@ class AgentClient(GenericClient):
         36: 'Invalid format for method',
     }
 
-    def __init__(self, sock, address, id_count, server):
+    def __init__(self, sock, address, id_count, server, agent_server):
+        self.logger = agent_server.logger
         self.logger.info("Recieving agent connection from addr {} on sock {}"
                          .format(address, sock))
 
@@ -72,15 +70,14 @@ class AgentClient(GenericClient):
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
         self._sock = sock
-        self._fp = sock.makefile()
+        self.fp = sock.makefile()
 
         # convenient access to global state
         self.server = server
-        self.config = server.config
-        self.manager_config = server.stratum_manager.config
-        self.stratum_clients = server.stratum_clients
-        self.agent_clients = server.agent_clients
-        self.celery = server.celery
+        self.manager_config = agent_server.stratum_manager.config
+        self.stratum_clients = agent_server.stratum_manager.address_worker_lut
+        self.agent_clients = agent_server.stratum_manager.agent_clients
+        self.reporter = server.reporter
 
         self._disconnected = False
         self._authenticated = False
@@ -91,7 +88,7 @@ class AgentClient(GenericClient):
         self._id = id_count
 
         # where we put all the messages that need to go out
-        self._write_queue = Queue()
+        self.write_queue = Queue()
 
         try:
             self.agent_clients[self._id] = self
@@ -104,22 +101,22 @@ class AgentClient(GenericClient):
         finally:
             write_greenlet.kill()
             try:
-                self.sock.shutdown(socket.SHUT_RDWR)
+                self._sock.shutdown(socket.SHUT_RDWR)
             except socket.error:
                 pass
             try:
                 self.fp.close()
-                self.sock.close()
+                self._sock.close()
             except socket.error:
                 pass
             self.server['agent_disconnects'].incr()
-            if self.client_state:
+            if self._client_state:
                 try:
                     del self.agent_clients[self._id]
                 except KeyError:
                     pass
 
-            self.logger.info("Closing agent connection for client {}".format(self.id))
+            self.logger.info("Closing agent connection for client {}".format(self._id))
 
     @property
     def summary(self):
@@ -129,24 +126,24 @@ class AgentClient(GenericClient):
         """ Utility for transmitting an error to the client """
         err = {'result': None, 'error': (num, self.errors[num], None)}
         self.logger.debug("error response: {}".format(err))
-        self._write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
+        self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self):
         """ Utility for transmitting success to the client """
         succ = {'result': True, 'error': None}
         self.logger.debug("success response: {}".format(succ))
-        self._write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
+        self.write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
 
     def read_loop(self):
         # do a finally call to cleanup when we exit
         while True:
             if self._disconnected:
                 self.logger.info("Agent client {} write loop exited, exiting read loop"
-                                 .format(self.id))
+                                 .format(self._id))
                 break
 
-            line = with_timeout(self.config['agent']['timeout'],
-                                self._fp.readline,
+            line = with_timeout(self.manager_config['agent']['timeout'],
+                                self.fp.readline,
                                 timeout_value='timeout')
 
             # push a new job every timeout seconds if requested
@@ -169,12 +166,12 @@ class AgentClient(GenericClient):
                 continue
 
             self.logger.debug("Data {} recieved on client {}"
-                              .format(data, self.id))
+                              .format(data, self._id))
 
             if 'method' in data:
                 meth = data['method'].lower()
                 if meth == 'hello':
-                    if self.client_version is not None:
+                    if self._client_version is not None:
                         self.send_error(32)
                         continue
                     self._client_version = data.get('params', [0.1])[0]
@@ -187,7 +184,7 @@ class AgentClient(GenericClient):
                     username = data.get('params', [""])[0]
                     user_worker = self.convert_username(username)
                     # setup lookup table for easier access from other read sources
-                    self.client_state = self.stratum_clients['addr_worker_lut'].get(user_worker)
+                    self.client_state = self.stratum_clients.get(user_worker)
                     if not self.client_state:
                         self.send_error(31)
 
@@ -195,7 +192,7 @@ class AgentClient(GenericClient):
                     self._authed[username] = user_worker
                     self.send_success()
                     self.logger.info("Agent {} authenticated worker {}"
-                                     .format(self.id, username))
+                                     .format(self._id, username))
                 elif meth == "stats.submit":
                     if self._client_version is None:
                         self.send_error(33)
@@ -212,12 +209,11 @@ class AgentClient(GenericClient):
                     user_worker, typ, data, stamp = data['params']
                     # lookup our authed usernames translated creds
                     address, worker = self._authed[user_worker]
-                    if typ in self.config['agent']['accepted_types']:
-                        self.celery.send_task_pp(
-                            'agent_receive', address, worker, typ, data, stamp)
+                    if typ in self.manager_config['agent']['accepted_types']:
+                        self.reporter.agent_send(address, worker, typ, data, stamp)
                         self.send_success()
                         self.logger.info("Agent {} transmitted payload for worker {}.{} of type {} and length {}"
-                                         .format(self.id, address, worker, typ, len(line)))
+                                         .format(self._id, address, worker, typ, len(line)))
                     else:
                         self.send_error(35)
             else:
