@@ -90,7 +90,7 @@ class CeleryReporter(Greenlet):
 
     def agent_send(self, *args, **kwargs):
         self.server['queued'].incr()
-        self.queue.put(("agent_send", args, kwargs))
+        self.queue.put(("agent_receive", args, kwargs))
 
     def add_block(self, *args, **kwargs):
         self.server['queued'].incr()
