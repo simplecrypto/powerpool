@@ -230,7 +230,8 @@ class AddressTracker(object):
         # Clear it before running a block call that might context switch...
         val = self.unreported
         self.unreported = 0
-        self.reporter.add_share(self.address, val)
+        if val != 0:
+            self.reporter.add_share(self.address, val)
 
     def count_share(self, amount):
         curr = time.time()
