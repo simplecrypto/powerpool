@@ -64,19 +64,21 @@ class MonitorNetwork(Greenlet):
 
         # internal vars
         self._last_gbt = {}
-        self._poll_connection = None
-        self._down_connections = []
-        self._job_counter = 0
-        self._last_aux_update = dict()
+        self._poll_connection = None  # our currently active RPC connection
+        self._down_connections = []  # list of RPC conns that are down
+        self._job_counter = 0  # a unique job ID counter
 
         # internal greenlets
         self._node_monitor = None
         self._height_poller = None
 
+        # Currently active jobs keyed by their unique ID
         self.jobs = {}
-        self.live_connections = []
-        self.latest_job = None
+        self.live_connections = []  # list of live RPC connections
+        self.latest_job = None  # The last job that was generated
+        # Latest job generation data from merge mining RPC servers
         self.merged_work = {}
+
         # general current network stats
         self.current_net = dict(difficulty=None,
                                 height=None,
@@ -122,6 +124,7 @@ class MonitorNetwork(Greenlet):
 
     @property
     def status(self):
+        """ For display in the http monitor """
         dct = dict(net_state=self.current_net,
                    block_stats=self.block_stats,
                    job_count=len(self.jobs))
@@ -134,10 +137,13 @@ class MonitorNetwork(Greenlet):
         return dct
 
     def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
+        """ Proxy method that sends merged blocks to the AuxChainMonitor for
+        submission """
         job = self.jobs[job_id]
         self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id):
+        """ Submit a valid block (hopefully!) to the RPC servers """
         job = self.jobs[job_id]
         block = hexlify(job.submit_serial(header, raw_coinbase=raw_coinbase))
 
@@ -208,6 +214,7 @@ class MonitorNetwork(Greenlet):
                                  job.total_value))
 
         self.block_stats['solves'] += 1
+        self.block_stats['last_solve_hash'] = hash_hex
         self.block_stats['last_solve_height'] = job.block_height
         self.block_stats['last_solve_worker'] = "{}.{}".format(address, worker)
         self.block_stats['last_solve_time'] = datetime.datetime.utcnow()
@@ -616,7 +623,8 @@ class MonitorAuxChain(Greenlet):
                     self.logger.info("Submitting {} new block to reporter"
                                      .format(self.config['name']))
                     # A horrible mess that grabs the required information for
-                    # reporting the new block that will failover properly
+                    # reporting the new block. Pretty failsafe so at least
+                    # partial information will be reporter regardless
                     try:
                         hsh = self.coinserv.getblockhash(new_height)
                     except Exception:
@@ -633,6 +641,7 @@ class MonitorAuxChain(Greenlet):
                         self.logger.info("", exc_info=True)
                         amount = -1
 
+                    self.block_stats['last_solve_hash'] = hsh
                     self.reporter.add_block(
                         address,
                         new_height,

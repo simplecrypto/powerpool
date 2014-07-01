@@ -37,6 +37,14 @@ def main():
 
 
 class PowerPool(object):
+    """ This is a singelton class that manages starting/stopping of the server,
+    along with all statistical counters rotation schedules. It takes the raw
+    config and distributes it to each module, as well as loading dynamic modules.
+
+    It also handles logging facilities by being the central logging registry.
+    Each module can "register" a logger with the main object, which attaches
+    it to configured handlers.
+    """
     def __init__(self, raw_config, procname="powerpool", term_timeout=3, loggers=None):
         if not loggers:
             loggers = [{'type': 'StreamHandler', 'level': 'DEBUG'}]
@@ -110,6 +118,8 @@ class PowerPool(object):
     def register_logger(self, name):
         logger = logging.getLogger(name)
         for keys, handler in self.log_handlers:
+            # If the keys are blank then we assume it wants all loggers
+            # registered
             if not keys or name in keys:
                 logger.addHandler(handler)
                 # handlers will manage level, so just propogate everything
@@ -118,6 +128,9 @@ class PowerPool(object):
         return logger
 
     def register_stat_counters(self, min_counters, sec_counters=None):
+        """ Creates and adds the stat counters to internal tracking dictionaries.
+        These dictionaries are iterated to perform stat rotation, as well
+        as accessed to perform stat logging """
         for key in min_counters:
             if key in self.stat_counters:
                 raise ValueError("{} stat counter key has already been registered!"
@@ -135,9 +148,12 @@ class PowerPool(object):
             self.sec_stat_counters.append(new)
 
     def __getitem__(self, key):
+        """ Allow convenient access to stat counters"""
         return self.stat_counters[key]
 
     def run(self):
+        """ Start all components and register them so we can request their
+        graceful termination at exit time. """
         # Start the main chain network monitor and aux chain monitors
         self.logger.info("Reporter engine starting up")
         cls = import_helper(self.raw_config['reporter']['type'])
@@ -169,10 +185,12 @@ class PowerPool(object):
             self.monitor_server.start()
             self.servers.append(self.monitor_server)
 
+        # Register shutdown signals
         gevent.signal(signal.SIGINT, self.exit, "SIGINT")
         gevent.signal(signal.SIGHUP, self.exit, "SIGHUP")
 
         self._exit_signal = Event()
+        # Wait for the exit signal to be called
         self._exit_signal.wait()
 
         # stop all stream servers
@@ -190,6 +208,8 @@ class PowerPool(object):
                 self.logger.info("All threads exited normally")
             else:
                 self.logger.info("Timeout reached, shutting down forcefully")
+
+        # Allow a force exit from multiple exit signals
         except KeyboardInterrupt:
             self.logger.info("Shutdown requested again by system, "
                              "exiting without cleanup")
@@ -197,6 +217,7 @@ class PowerPool(object):
         self.logger.info("=" * 80)
 
     def exit(self, signal=None):
+        """ Handle an exit request """
         self.logger.info("*" * 80)
         self.logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
                          .format(signal, self.term_timeout))
@@ -204,6 +225,7 @@ class PowerPool(object):
 
     @property
     def status(self):
+        """ For display in the http monitor """
         return dict(uptime=str(datetime.datetime.utcnow() - self.server_start),
                     server_start=str(self.server_start),
                     version=dict(
@@ -214,6 +236,7 @@ class PowerPool(object):
                     )
 
     def tick_stats(self):
+        """ A greenlet that handles rotation of statistics """
         try:
             self.logger.info("Stat rotater starting up")
             last_tick = int(time.time())

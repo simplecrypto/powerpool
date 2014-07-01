@@ -51,6 +51,8 @@ class StratumManager(object):
             exit()
 
     def __init__(self, server, **config):
+        """ Handles starting all stratum servers and agent servers, along
+        with detecting algorithm module imports """
         self.server = server
         self.logger = server.register_logger('stratum_manager')
         self._set_config(**config)
@@ -63,18 +65,22 @@ class StratumManager(object):
         # A dictionary of lists of connected clients indexed by address and
         # worker tuple
         self.address_worker_lut = {}
+        # each of our stream server objects for trickling down a shutdown
+        # signal
         self.stratum_servers = []
         self.agent_servers = []
+        # counters that allow quick display of these numbers. stratum only
         self.authed_clients = 0
         self.idle_clients = 0
+        # Unique client ID counters for stratum and agents
+        self.stratum_id_count = 0
+        self.agent_id_count = 0
 
         self.server = server
         self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
 
+        # Detect and load all the hash functions we can find
         self.algos = {}
-        self.stratum_id_count = 0
-        self.agent_id_count = 0
-
         try:
             from drk_hash import getPoWHash
         except ImportError:
@@ -117,6 +123,8 @@ class StratumManager(object):
 
     @property
     def share_percs(self):
+        """ Pretty display of what percentage each reject rate is. Counts
+        from beginning of server connection """
         acc_tot = self.server['valid'].total or 1
         low_tot = self.server['reject_low'].total
         dup_tot = self.server['reject_dup'].total
@@ -129,6 +137,7 @@ class StratumManager(object):
 
     @property
     def status(self):
+        """ For display in the http monitor """
         dct = dict(share_percs=self.share_percs,
                    mhps=(self.server.jobmanager.config['hashes_per_share'] *
                          self.server['valid'].minute / 1000000 / 60.0),
@@ -148,7 +157,8 @@ class StratumManager(object):
         self.clients[client.id] = client
 
     def set_user(self, client):
-        # Add the client (or create) appropriate worker and address trackers
+        """ Add the client (or create) appropriate worker and address trackers
+        """
         user_worker = (client.address, client.worker)
         self.address_worker_lut.setdefault(user_worker, [])
         self.address_worker_lut[user_worker].append(client)
@@ -196,6 +206,7 @@ password_arg_parser.add_argument('-d', '--diff', type=int)
 
 
 class StratumServer(GenericServer):
+    """ A single port binding of our stratum server. """
 
     def _set_config(self, **config):
         self.config = dict(address="127.0.0.1", start_difficulty=128,
@@ -222,18 +233,24 @@ class StratumServer(GenericServer):
         GenericServer.stop(self, *args, **kwargs)
 
     def handle(self, sock, address):
+        """ A new connection appears on the server, so setup a new StratumClient
+        object to manage it. """
         self.server['stratum_connects'].incr()
         self.stratum_manager.stratum_id_count += 1
         StratumClient(sock, address, self.stratum_manager.stratum_id_count, self.server, self)
 
 
 class StratumClient(GenericClient):
+    """ Object representation of a single stratum connection to the server. """
+
+    # Stratum error codes
     errors = {20: 'Other/Unknown',
               21: 'Job not found (=stale)',
               22: 'Duplicate share',
               23: 'Low difficulty share',
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
+    # enhance readability by reducing magic number use...
     STALE_SHARE_ERR = 21
     LOW_DIFF_ERR = 23
     DUP_SHARE_ERR = 22
@@ -257,7 +274,7 @@ class StratumClient(GenericClient):
         # Failed keepalive probles before declaring other end dead
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
-        # global items
+        # global items, allows access to other modules in PowerPool
         self.server = server
         self.config = stratum_server.config
         self.manager_config = stratum_server.stratum_manager.config
@@ -344,11 +361,13 @@ class StratumClient(GenericClient):
 
     @property
     def summary(self):
+        """ Displayed on the all client view in the http status monitor """
         return dict(worker=self.worker,
                     address=self.address)
 
     @property
     def details(self):
+        """ Displayed on the single client view in the http status monitor """
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
@@ -416,6 +435,9 @@ class StratumClient(GenericClient):
         self._push(job)
 
     def _push(self, job, flush=False):
+        """ Abbreviated push update that will occur when pushing new block
+        notifications. Mico-optimized to try and cut stale share rates as much
+        as possible. """
         self.last_job_id = job.job_id
         self.last_job_push = time.time()
         # get client local job id to map current difficulty
@@ -472,6 +494,8 @@ class StratumClient(GenericClient):
             extra1=self.id,
             extra2=params[2],
             ntime=params[3])
+        # Grab the raw coinbase out of the job object before gevent can preempt
+        # to another thread and change the value. Very important!
         coinbase_raw = job.coinbase.raw
 
         # Check a submitted share against previous shares to eliminate
@@ -507,6 +531,7 @@ class StratumClient(GenericClient):
         header_hash = sha256(sha256(header).digest()).digest()[::-1]
         hash_hex = hexlify(header_hash)
 
+        # check each aux chain for validity
         for chain_id, data in job.merged_data.iteritems():
             if hash_int <= data['target']:
                 self.jobmanager.found_merged_block(self.address,
@@ -550,11 +575,14 @@ class StratumClient(GenericClient):
         self.logger.info("Authentication request from {} for username {}"
                          .format(self.peer_name[0], username))
         user_worker = self.convert_username(username)
+
         # unpack into state dictionary
         self.address, self.worker = user_worker
         self.stratum_manager.set_user(self)
         self.authenticated = True
         self.stratum_manager.authed_clients += 1
+
+        # notify of success authing and send him current diff and latest job
         self.send_success(self.msg_id)
         self.push_difficulty()
         self.push_job()
@@ -584,6 +612,7 @@ class StratumClient(GenericClient):
         self.last_diff_adj = time.time()
 
     def subscribe(self, data):
+        """ Performs stratum subscription logic """
         self.subscr_notify = sha1(urandom(4)).hexdigest()
         self.subscr_difficulty = sha1(urandom(4)).hexdigest()
         ret = {'result':
@@ -602,14 +631,20 @@ class StratumClient(GenericClient):
     def read_loop(self):
         while True:
             if self._disconnected:
-                self.logger.debug("Read loop encountered flag from write, exiting")
+                self.logger.debug("Read loop encountered disconnect flag from "
+                                  "write, exiting")
                 break
 
+            # designed to time out approximately "push_job_interval" after
+            # the user last recieved a job. Some miners will consider the
+            # mining server dead if they don't recieve something at least once
+            # a minute, regardless of whether a new job is _needed_. This
+            # aims to send a job _only_ as often as needed
             line = with_timeout(time.time() - self.last_job_push + self.manager_config['push_job_interval'] - self.time_seed,
                                 self.fp.readline,
                                 timeout_value='timeout')
 
-            # push a new job every timeout seconds if requested
+            # push a new job if we timed out
             if line == 'timeout':
                 if not self.idle and (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
                     self.idle = True
@@ -638,12 +673,18 @@ class StratumClient(GenericClient):
                     self.send_error()
                     continue
             else:
+                # otherwise disconnect. Reading from a defunct connection yeilds
+                # an EOF character which gets stripped off
                 break
 
             # set the msgid
             self.msg_id = data.get('id', 1)
-            self.logger.debug("Data {} recieved on client {}".format(data, self.id))
+            if __debug__:
+                self.logger.debug("Data {} recieved on client {}"
+                                  .format(data, self.id))
 
+            # run a different function depending on the action requested from
+            # user
             if 'method' in data:
                 meth = data['method'].lower()
                 if meth == 'mining.subscribe':

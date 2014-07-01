@@ -10,7 +10,9 @@ from .server import GenericServer, GenericClient
 
 
 class AgentServer(GenericServer):
-    """ The agent server that pairs with a stratum server. """
+    """ The agent server that pairs with a single port binding of a stratum
+    server. Accepts connections from ppagent and reports more details
+    statistics. """
     def _set_config(self, **config):
         self.config = dict(port_diff=1111,
                            accepted_types=['temp', 'status', 'hashrate', 'thresholds'])
@@ -45,6 +47,10 @@ class AgentServer(GenericServer):
 
 
 class AgentClient(GenericClient):
+    """ Object representation of a single ppagent agent connected to the server
+    """
+
+    # Our (very stratum like) protocol errors
     errors = {
         20: 'Other/Unknown',
         25: 'Not subscribed',

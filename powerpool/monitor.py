@@ -23,6 +23,8 @@ logger = LocalProxy(
 
 
 class Logger(object):
+    """ A dummp file object to allow using a logger to log requests instead
+    of sending to stderr like the default WSGI logger """
     logger = None
 
     def write(self, s):
@@ -30,6 +32,8 @@ class Logger(object):
 
 
 class CustomWSGIHandler(WSGIHandler):
+    """ A simple custom handler allows us to provide more helpful request
+    logging format. Format designed for easy profiling """
     def format_request(self):
         length = self.response_length or '-'
         delta = time_format(self.time_finish - self.time_start)
@@ -43,6 +47,7 @@ class CustomWSGIHandler(WSGIHandler):
 
 
 class MonitorWSGI(WSGIServer):
+    # Use our custom wsgi handler
     handler_class = CustomWSGIHandler
 
     def __init__(self, server, DEBUG=False, address='127.0.0.1', port=3855, enabled=True, **kwargs):
@@ -59,6 +64,7 @@ class MonitorWSGI(WSGIServer):
         app.config['DEBUG'] = debug
         app.register_blueprint(main)
 
+        # Monkey patch the wsgi logger
         Logger.logger = wsgi_logger
         app.real_logger = logger
 
@@ -73,7 +79,10 @@ class MonitorWSGI(WSGIServer):
         self.application.real_logger.info("Stopping monitoring server")
         WSGIServer.stop(self, *args, **kwargs)
 
+
 def jsonize(item):
+    """ Recursive function that converts a lot of non-serializable content
+    to something json.dumps will like better """
     if isinstance(item, dict):
         new = {}
         for k, v in item.iteritems():
@@ -156,7 +165,8 @@ def agents():
 
 class SecondStatManager(object):
     """ Monitors the last 60 minutes of a specific number at 1 minute precision
-    and the last 1 minute of a number at 60 second precision.
+    and the last 1 minute of a number at 1 second precision. Essentially a
+    counter gets incremented and rotated through a circular buffer.
     """
     def __init__(self):
         self._val = 0
