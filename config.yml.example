@@ -193,6 +193,14 @@ stratum:
     # time between sending latest job to workers when there is no new block
     push_job_interval: 45
 
+    # Client will be considered idle if we don't recieve a new share from them
+    # for at least x seconds
+    #idle_worker_threshold: 300
+
+    # Client will be disconnected if we don't recieve a new share from them
+    # for at least x seconds
+    #idle_worker_threshold: 3600
+
     # the agent server allows data collection agents to connect and report
     # stats about stratum clients. disabled by default. If enabled an agent
     # server will be started to mirror every stratum port add `port_diff`

@@ -40,6 +40,7 @@ class StratumManager(object):
                            push_job_interval=30,
                            donate_address='',
                            idle_worker_threshold=300,
+                           idle_worker_disconnect_threshold=3600,
                            agent=dict(enabled=False,
                                       port_diff=1111,
                                       timeout=120,
@@ -649,6 +650,11 @@ class StratumClient(GenericClient):
                 if not self.idle and (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
                     self.idle = True
                     self.stratum_manager.idle_clients += 1
+
+                if (time.time() - self.last_share_submit) > self.manager_config['idle_worker_disconnect_threshold']:
+                    self.logger.info("Disconnecting worker {}.{} at ip {} for inactivity"
+                                     .format(self.address, self.worker, self.peer_name[0]))
+                    break
 
                 if (self.authenticated is True and  # don't send to non-authed
                     # force send if we need to push a new difficulty
