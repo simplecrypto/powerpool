@@ -1,12 +1,14 @@
-from flask import Flask, jsonify, abort, Blueprint, current_app
+from flask import (Flask, jsonify, abort, Blueprint, current_app,
+                   send_from_directory)
 from werkzeug.local import LocalProxy
 from collections import deque
 from cryptokit.block import BlockTemplate
 from cryptokit.transaction import Transaction
 from gevent.wsgi import WSGIServer, WSGIHandler
-from gevent.coros import RLock
 
 from .utils import time_format
+
+import os
 
 
 main = Blueprint('main', __name__)
@@ -229,3 +231,12 @@ class MinuteStatManager(SecondStatManager):
         self.mins.append(self._val)
         self.total += self._val
         self._val = 0
+
+
+viewer_dir = os.path.join(os.path.abspath(os.path.dirname(__file__) + '/../'), 'viewer')
+@main.route('/viewer/')
+@main.route('/viewer/<path:filename>')
+def viewer(filename=None):
+    if not filename:
+        filename = "index.html"
+    return send_from_directory(viewer_dir, filename)
