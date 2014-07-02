@@ -728,12 +728,12 @@ class StratumClient(GenericClient):
                             (time.time() - self.last_diff_adj) > self.manager_config['vardiff']['interval']):
                         self.recalc_vardiff()
                 else:
-                    self.logger.warn("Unkown action for command {}"
-                                     .format(self.peer_name[0]))
+                    self.logger.warn("Unkown action {} for command {}"
+                                     .format(data['method'][:20], self.peer_name[0]))
                     self.server['unk_err'].incr()
                     self.send_error()
             else:
-                self.logger.warn("Unkown action for command {}"
+                self.logger.warn("Empty action in JSON {}"
                                  .format(self.peer_name[0]))
                 self.server['unk_err'].incr()
                 self.send_error()
