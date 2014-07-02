@@ -139,13 +139,44 @@ class MonitorNetwork(Greenlet):
     def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
         """ Proxy method that sends merged blocks to the AuxChainMonitor for
         submission """
-        job = self.jobs[job_id]
+        try:
+            job = self.jobs[job_id]
+        except KeyError:
+            self.logger.error("Unable to submit block for job id {}, it "
+                              "doesn't exist anymore!".format(job_id))
         self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id):
         """ Submit a valid block (hopefully!) to the RPC servers """
-        job = self.jobs[job_id]
+        try:
+            job = self.jobs[job_id]
+        except KeyError:
+            self.logger.error("Unable to submit block for job id {}, it "
+                              "doesn't exist anymore!".format(job_id))
         block = hexlify(job.submit_serial(header, raw_coinbase=raw_coinbase))
+        recorded = []
+
+        def record_outcome(success):
+            if recorded:
+                return
+            recorded.append(True)
+            self.logger.info("Recording block submission outcome {}"
+                             .format(success))
+
+            if success:
+                self.block_stats['accepts'] += 1
+                self.recent_blocks.append(
+                    dict(height=job.block_height, timestamp=int(time.time())))
+                self.reporter.add_block(
+                    address,
+                    job.block_height,
+                    job.total_value,
+                    job.fee_total,
+                    hexlify(job.bits),
+                    hash_hex,
+                    worker=worker)
+            else:
+                self.block_stats['rejects'] += 1
 
         def submit_block(conn):
             retries = 0
@@ -155,7 +186,7 @@ class MonitorNetwork(Greenlet):
                 try:
                     res = conn.getblocktemplate({'mode': 'submit', 'data': block})
                 except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.info("Block failed to submit to the server {} with submitblock! {}"
+                    self.logger.info("Block failed to submit to the server {} with getblocktemplate! {}"
                                      .format(conn.name, e))
                     if getattr(e, 'error', {}).get('code', 0) != -8:
                         self.logger.error(getattr(e, 'error'), exc_info=True)
@@ -167,19 +198,9 @@ class MonitorNetwork(Greenlet):
                         self.logger.error(getattr(e, 'error'))
 
                 if res is None:
-                    self.block_stats['accepts'] += 1
-                    self.recent_blocks.append(
-                        dict(height=job.block_height, timestamp=int(time.time())))
-                    self.reporter.add_block(
-                        address,
-                        job.block_height,
-                        job.total_value,
-                        job.fee_total,
-                        hexlify(job.bits),
-                        hash_hex,
-                        worker=worker)
-                    self.logger.info("NEW BLOCK ACCEPTED by {}!!!"
+                    self.logger.info("NEW BLOCK ACCEPTED by {}!"
                                      .format(conn.name))
+                    record_outcome(True)
                     break  # break retry loop if success
                 else:
                     self.logger.error(
@@ -188,23 +209,25 @@ class MonitorNetwork(Greenlet):
                         exc_info=True)
                 sleep(1)
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
-            else:
-                self.block_stats['rejects'] += 1
 
-        tries = 0
-        while tries < 200:
+        for tries in xrange(200):
             if not self.live_connections:
-                tries += 1
                 self.logger.error("No live connections to submit new block to!"
                                   " Retry {} / 200.".format(tries))
                 sleep(0.1)
                 continue
 
+            gl = []
             for conn in self.live_connections:
                 # spawn a new greenlet for each submission to do them all async.
                 # lower orphan chance
-                spawn(submit_block, conn)
+                gl.append(spawn(submit_block, conn))
 
+            gevent.joinall(gl)
+            # If none of the submission threads were successfull then record a
+            # failure
+            if not recorded:
+                record_outcome(False)
             break
 
         self.logger.log(35, "Valid network block identified!")
@@ -506,7 +529,7 @@ class MonitorNetwork(Greenlet):
             hex_bits = hexlify(bt_obj.bits)
             self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
             self.current_net['subsidy'] = bt_obj.total_value
-            self.current_net['height'] = bt_obj.block_height
+            self.current_net['height'] = bt_obj.block_height - 1
             self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
             self.current_net['transactions'] = len(bt_obj.transactions)
 
