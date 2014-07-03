@@ -145,7 +145,16 @@ def client(address=None):
     except KeyError:
         abort(404)
 
-    return jsonify(**{address: [client.details for client in clients]})
+    return jsonify(**{address: [getattr(reporter.addresses.get(address), 'status', None)] +
+                      [client.details for client in clients]})
+
+
+@main.route('/ip/<address>')
+def ip_lookup(address=None):
+    clients = [client.details for client in stratum_manager.clients.itervalues()
+               if getattr(client, 'peer_name', [False])[0] == address]
+
+    return jsonify(**{address: clients})
 
 
 @main.route('/clients')

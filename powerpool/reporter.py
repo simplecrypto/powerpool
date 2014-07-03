@@ -242,6 +242,12 @@ class AddressTracker(object):
         self.last_log = curr
 
     @property
+    def status(self):
+        spm = self.spm
+        return dict(megahashrate=self.reporter.server.jobmanager.config['hashes_per_share'] * spm / 60.0 / 1000000,
+                    spm=spm)
+
+    @property
     def spm(self):
         """ Called by the client code to determine how many shares per second
         are currently being submitted. Automatically cleans up the times older

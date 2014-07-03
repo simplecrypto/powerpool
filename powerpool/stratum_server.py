@@ -1,5 +1,6 @@
 import json
 import socket
+import datetime
 import argparse
 import struct
 import random
@@ -364,7 +365,11 @@ class StratumClient(GenericClient):
     def summary(self):
         """ Displayed on the all client view in the http status monitor """
         return dict(worker=self.worker,
-                    address=self.address)
+                    idle=self.idle)
+
+    @property
+    def last_share_submit_delta(self):
+        return datetime.datetime.utcnow() - datetime.datetime.utcfromtimestamp(self.last_share_submit)
 
     @property
     def details(self):
@@ -372,10 +377,12 @@ class StratumClient(GenericClient):
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
+                    id=self.id,
+                    last_share_submit=str(self.last_share_submit_delta),
                     idle=self.idle,
                     address=self.address,
-                    peer_name=self.peer_name[0],
-                    connection_time=self.connection_time_dt)
+                    ip_address=self.peer_name[0],
+                    connection_time=str(self.connection_duration))
 
     def send_error(self, num=20, id_val=1):
         """ Utility for transmitting an error to the client """
@@ -383,7 +390,6 @@ class StratumClient(GenericClient):
                'result': None,
                'error': (num, self.errors[num], None)}
         self.logger.warn("Error number {} on ip {}".format(num, self.peer_name[0]))
-        #self.logger.debug("error response: {}".format(pformat(err)))
         self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self, id_val=1):

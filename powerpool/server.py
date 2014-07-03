@@ -62,5 +62,9 @@ class GenericClient(object):
             self._disconnected = True
 
     @property
+    def connection_duration(self):
+        return datetime.datetime.utcnow() - self.connection_time_dt
+
+    @property
     def connection_time_dt(self):
         return datetime.datetime.utcfromtimestamp(self.connection_time)
