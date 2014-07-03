@@ -604,13 +604,15 @@ class StratumClient(GenericClient):
 
         if new_diff != self.difficulty:
             self.logger.info(
-                "VARDIFF: Moving to D{} from D{}".format(new_diff, self.difficulty))
+                "VARDIFF: Moving to D{} from D{} on {}.{}"
+                .format(new_diff, self.difficulty, self.address, self.worker))
             self.next_diff = new_diff
         else:
             self.logger.debug("VARDIFF: Not adjusting difficulty, already "
                               "close enough")
 
         self.last_diff_adj = time.time()
+        self.push_job(timeout=True)
 
     def subscribe(self, data):
         """ Performs stratum subscription logic """
