@@ -116,11 +116,10 @@ class AgentClient(GenericClient):
             except socket.error:
                 pass
             self.server['agent_disconnects'].incr()
-            if self._client_state:
-                try:
-                    del self.agent_clients[self._id]
-                except KeyError:
-                    pass
+            try:
+                del self.agent_clients[self._id]
+            except KeyError:
+                pass
 
             self.logger.info("Closing agent connection for client {}".format(self._id))
 
