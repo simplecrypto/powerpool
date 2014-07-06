@@ -574,7 +574,7 @@ class StratumClient(GenericClient):
         except ArgumentParserError:
             pass
         else:
-            if args.diff and args.diff in self.config['vardiff']['tiers']:
+            if args.diff and args.diff in self.manager_config['vardiff']['tiers']:
                 self.difficulty = args.diff
                 self.next_diff = args.diff
 
