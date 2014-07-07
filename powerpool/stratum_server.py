@@ -606,8 +606,9 @@ class StratumClient(GenericClient):
         tracker = self.reporter.addresses.get(self.address)
         if not tracker:
             self.logger.debug("VARDIFF: No address tracker, must be no valid shares for this user")
-            return
-        ideal_diff = tracker.spm / spm_tar
+            ideal_diff = 0.0
+        else:
+            ideal_diff = tracker.spm / spm_tar
         self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
                           .format(self.id, ideal_diff))
         # find the closest tier for them
