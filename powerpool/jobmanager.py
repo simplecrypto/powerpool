@@ -480,7 +480,7 @@ class MonitorNetwork(Greenlet):
 
         # Darkcoin payee amount
         if self._last_gbt.get('payee', '') != '':
-            payout = self._last_gbt['coinbasevalue'] / 20
+            payout = self._last_gbt['coinbasevalue'] / 5
             self._last_gbt['coinbasevalue'] -= payout
             coinbase.outputs.append(
                 Output.to_address(payout, self._last_gbt['payee']))
