@@ -739,9 +739,9 @@ class StratumClient(GenericClient):
                     self.logger.warn("Unkown action {} for command {}"
                                      .format(data['method'][:20], self.peer_name[0]))
                     self.server['unk_err'].incr()
-                    self.send_error()
+                    self.send_error(id=self.msg_id)
             else:
                 self.logger.warn("Empty action in JSON {}"
                                  .format(self.peer_name[0]))
                 self.server['unk_err'].incr()
-                self.send_error()
+                self.send_error(id=self.msg_id)
