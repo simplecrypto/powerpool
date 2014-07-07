@@ -34,6 +34,7 @@ class MonitorNetwork(Greenlet):
                            block_poll=0.2,
                            job_refresh=15,
                            rpc_ping_int=2,
+                           pow_block_hash=False,
                            poll=None,
                            pool_address='',
                            signal=None)
@@ -476,9 +477,20 @@ class MonitorNetwork(Greenlet):
             Input.coinbase(self._last_gbt['height'],
                            addtl_push=[mm_data] if mm_data else [],
                            extra_script_sig=b'\0' * extranonce_length))
+
+        # Darkcoin payee amount
+        if self._last_gbt.get('payee', '') != '':
+            payout = self._last_gbt['coinbasevalue'] / 20
+            self._last_gbt['coinbasevalue'] -= payout
+            coinbase.outputs.append(
+                Output.to_address(payout, self._last_gbt['payee']))
+            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval reduced to {}"
+                             .format(self._last_gbt['payee'], payout, self._last_gbt['coinbasevalue']))
+
         # simple output to the proper address and value
         coinbase.outputs.append(
             Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
+
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
                                         coinbase,
@@ -493,6 +505,7 @@ class MonitorNetwork(Greenlet):
         bt_obj.job_id = job_id
         bt_obj.diff1 = self.config['diff1']
         bt_obj.algo = self.config['algo']
+        bt_obj.pow_block_hash = self.config['pow_block_hash']
         bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
 

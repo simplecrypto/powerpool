@@ -37,6 +37,10 @@ jobmanager:
     # scyptn
     algo: scrypt
 
+    # Should the proof of work algorithm be used to produce the block hash, or
+    # sha256. Most use sha256, but some like Darkcoin use the POW algo
+    #pow_block_hash: False
+
     # a list of connections to daemons to get block templates from and submit
     # complete blocks to
     main_coinservs:
@@ -106,7 +110,6 @@ jobmanager:
     # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
     # sha...
     #diff1: 0x0000FFFF00000000000000000000000000000000000000000000000000000000
-    #hashes_per_share: 0xFFFF
     # server side size. synonymous with worker id
     #extranonce_serv_size: 8
     # size that clients will generate in bytes
@@ -139,7 +142,7 @@ reporter:
     # Trackers (share aggregation objects) are not directly tied to clients,
     # so they just get removed after they've been empty for a while. Time in
     # seconds for having them be cleaned up
-    #tracker_expiry_time=180
+    #tracker_expiry_time: 180
 
 # port and address to listen on for stratum server
 stratum:
@@ -199,7 +202,7 @@ stratum:
 
     # Client will be disconnected if we don't recieve a new share from them
     # for at least x seconds
-    #idle_worker_threshold: 3600
+    #idle_worker_disconnect_threshold: 3600
 
     # the agent server allows data collection agents to connect and report
     # stats about stratum clients. disabled by default. If enabled an agent
