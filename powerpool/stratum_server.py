@@ -492,7 +492,6 @@ class StratumClient(GenericClient):
             self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_stale'].incr(difficulty)
             self.server['reject_stale_shares'].incr()
-            return self.LOW_DIFF, difficulty
             return self.STALE_SHARE, difficulty
 
         # assemble a complete block header bytestring
