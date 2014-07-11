@@ -22,6 +22,44 @@ from .agent_server import AgentServer
 from .utils import recursive_update
 
 
+from ctypes import *
+class tcp_info(Structure):
+         _fields_  = [
+                ('tcpi_state',c_uint8),
+                ('tcpi_ca_state',c_uint8),
+                ('tcpi_retransmits',c_uint8),
+                ('tcpi_probes',c_uint8),
+                ('tcpi_backoff',c_uint8),
+                ('tcpi_options',c_uint8),
+                ('tcpi_snd_wscale',c_uint8,4),
+                  ('tcpi_rcv_wscale',c_uint8,4),
+                ('tcpi_rto',c_uint32),
+                ('tcpi_ato',c_uint32),
+                ('tcpi_snd_mss',c_uint32),
+                ('tcpi_rcv_mss',c_uint32),
+                ('tcpi_unacked',c_uint32),
+                ('tcpi_sacked',c_uint32),
+                ('tcpi_lost',c_uint32),
+                ('tcpi_retrans',c_uint32),
+                ('tcpi_fackets',c_uint32),
+                ('tcpi_last_data_sent',c_uint32),
+                ('tcpi_last_ack_sent',c_uint32),
+                ('tcpi_last_data_recv',c_uint32),
+                ('tcpi_last_ack_recv',c_uint32),
+                ('tcpi_pmtu',c_uint32),
+                ('tcpi_rcv_ssthresh',c_uint32),
+                ('tcpi_rtt',c_uint32),
+                ('tcpi_rttvar',c_uint32),
+                ('tcpi_snd_ssthresh',c_uint32),
+                ('tcpi_snd_cwnd',c_uint32),
+                ('tcpi_advmss',c_uint32),
+                ('tcpi_reordering',c_uint32),
+                ('tcpi_rcv_rtt',c_uint32),
+                ('tcpi_rcv_space',c_uint32),
+                ('tcpi_total_retrans',c_uint32)
+                  ]
+
+
 class StratumManager(object):
     """ Manages the stratum servers and keeps lookup tables for addresses. """
 
@@ -374,10 +412,13 @@ class StratumClient(GenericClient):
     @property
     def details(self):
         """ Displayed on the single client view in the http status monitor """
+        fmt = "B"*7+"I"*21
+        info = tcp_info(*struct.unpack(fmt, self.sock.getsockopt(socket.SOL_TCP, socket.TCP_INFO, 92)))
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
                     id=self.id,
+                    info={k[0]: getattr(info, k[0]) for k in info._fields_},
                     last_share_submit=str(self.last_share_submit_delta),
                     idle=self.idle,
                     address=self.address,
