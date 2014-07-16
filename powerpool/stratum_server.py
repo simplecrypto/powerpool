@@ -497,6 +497,7 @@ class StratumClient(GenericClient):
     def submit_job(self, data):
         """ Handles recieving work submission and checking that it is valid
         , if it meets network diff, etc. Sends reply to stratum client. """
+        start = time.time()
         params = data['params']
         # [worker_name, job_id, extranonce2, ntime, nonce]
         # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
@@ -603,7 +604,8 @@ class StratumClient(GenericClient):
                                     self.worker,
                                     hash_hex,
                                     header,
-                                    job.job_id)
+                                    job.job_id,
+                                    start)
 
         return self.BLOCK_FOUND, difficulty
 

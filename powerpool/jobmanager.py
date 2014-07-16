@@ -147,7 +147,7 @@ class MonitorNetwork(Greenlet):
                               "doesn't exist anymore!".format(job_id))
         self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
 
-    def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id):
+    def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id, start):
         """ Submit a valid block (hopefully!) to the RPC servers """
         try:
             job = self.jobs[job_id]
@@ -161,8 +161,8 @@ class MonitorNetwork(Greenlet):
             if recorded:
                 return
             recorded.append(True)
-            self.logger.info("Recording block submission outcome {}"
-                             .format(success))
+            self.logger.info("Recording block submission outcome {} after {}"
+                             .format(success, time.time() - start))
 
             if success:
                 self.block_stats['accepts'] += 1
@@ -185,14 +185,14 @@ class MonitorNetwork(Greenlet):
                 retries += 1
                 res = "failed"
                 try:
-                    res = conn.getblocktemplate({'mode': 'submit', 'data': block})
+                    res = conn.submitblock(block)
                 except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
-                    self.logger.info("Block failed to submit to the server {} with getblocktemplate! {}"
+                    self.logger.info("Block failed to submit to the server {} with submitblock! {}"
                                      .format(conn.name, e))
                     if getattr(e, 'error', {}).get('code', 0) != -8:
                         self.logger.error(getattr(e, 'error'), exc_info=True)
                     try:
-                        res = conn.submitblock(block)
+                        res = conn.getblocktemplate({'mode': 'submit', 'data': block})
                     except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
                         self.logger.error("Block failed to submit to the server {}!"
                                           .format(conn.name), exc_info=True)
