@@ -36,6 +36,8 @@ class MonitorNetwork(Greenlet):
                            rpc_ping_int=2,
                            pow_block_hash=False,
                            poll=None,
+                           prefix='',
+                           coin='',
                            pool_address='',
                            signal=None)
         self.config.update(kwargs)
@@ -52,12 +54,12 @@ class MonitorNetwork(Greenlet):
     def __init__(self, server, **config):
         Greenlet.__init__(self)
         self._set_config(**config)
-        self.logger = server.register_logger('jobmanager')
+        self.logger = server.register_logger(self.config['prefix'] + 'jobmanager')
 
         # convenient access to global objects
         self.stratum_manager = server.stratum_manager
         self.server = server
-        self.server.register_stat_counters(self.one_min_stats)
+        self.server.register_stat_counters(self.config['prefix'] + s for s in self.one_min_stats)
         self.reporter = server.reporter
 
         # Aux network monitors (merged mining)
@@ -133,7 +135,7 @@ class MonitorNetwork(Greenlet):
         for key, mon in self.auxmons.iteritems():
             dct[key] = mon.status
 
-        dct.update({key: self.server[key].summary()
+        dct.update({key: self.server[self.config['prefix'] + key].summary()
                     for key in self.one_min_stats})
         return dct
 
@@ -144,8 +146,9 @@ class MonitorNetwork(Greenlet):
             job = self.jobs[job_id]
         except KeyError:
             self.logger.error("Unable to submit block for job id {}, it "
-                              "doesn't exist anymore!".format(job_id))
-        self.auxmons[typ].found_block(address, worker, header, coinbase_raw, job)
+                              "doesn't exist anymore! Only {}".format(job_id, self.jobs.keys()))
+            return
+        self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id, start):
         """ Submit a valid block (hopefully!) to the RPC servers """
@@ -153,7 +156,8 @@ class MonitorNetwork(Greenlet):
             job = self.jobs[job_id]
         except KeyError:
             self.logger.error("Unable to submit block for job id {}, it "
-                              "doesn't exist anymore!".format(job_id))
+                              "doesn't exist anymore! only {}".format(job_id, self.jobs.keys()))
+            return
         block = hexlify(job.submit_serial(header, raw_coinbase=raw_coinbase))
         recorded = []
 
@@ -175,7 +179,8 @@ class MonitorNetwork(Greenlet):
                     job.fee_total,
                     hexlify(job.bits),
                     hash_hex,
-                    worker=worker)
+                    worker=worker,
+                    currency=self.config['coin'])
             else:
                 self.block_stats['rejects'] += 1
 
@@ -511,6 +516,24 @@ class MonitorNetwork(Greenlet):
 
         if push:
             if flush:
+                self.server[self.config['prefix'] + 'work_restarts'].incr()
+            self.server[self.config['prefix'] + 'work_pushes'].incr()
+
+        self.server[self.config['prefix'] + 'new_jobs'].incr()
+
+        if new_block:
+            hex_bits = hexlify(bt_obj.bits)
+            self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
+            self.current_net['subsidy'] = bt_obj.total_value
+            self.current_net['height'] = bt_obj.block_height - 1
+            self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
+            self.current_net['transactions'] = len(bt_obj.transactions)
+
+        self.new_job(bt_obj, job_id, push, flush, new_block)
+
+    def new_job(self, bt_obj, job_id, push=False, flush=False, new_block=False):
+        if push:
+            if flush:
                 self.logger.info("New work announced! Wiping previous jobs...")
                 self.jobs.clear()
                 self.latest_job = None
@@ -532,19 +555,6 @@ class MonitorNetwork(Greenlet):
             self.logger.info("New job enqueued for transmission to {} users in {}"
                              .format(len(self.stratum_manager.clients),
                                      time_format(time.time() - t)))
-            if flush:
-                self.server['work_restarts'].incr()
-            self.server['work_pushes'].incr()
-
-        self.server['new_jobs'].incr()
-
-        if new_block:
-            hex_bits = hexlify(bt_obj.bits)
-            self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
-            self.current_net['subsidy'] = bt_obj.total_value
-            self.current_net['height'] = bt_obj.block_height - 1
-            self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
-            self.current_net['transactions'] = len(bt_obj.transactions)
 
 
 class RPCException(Exception):
