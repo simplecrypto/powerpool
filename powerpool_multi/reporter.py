@@ -1,5 +1,4 @@
 import time
-import json
 
 from gevent import sleep, Greenlet, spawn
 from redis import Redis, RedisError
@@ -15,10 +14,14 @@ class RedisReporter(Greenlet):
 
     def _set_config(self, **config):
         self.config = dict(report_pool_stats=True,
+                           algo='',
                            share_batch_interval=60,
                            tracker_expiry_time=180)
-        self.config['current_block'] = "current-block-{}".format(self.config['algo'])
         self.config.update(config)
+        self.config['current_block'] = "current_block_{}".format(self.config['algo'])
+        if not self.config['algo']:
+            self.logger.error("must define an algorithm!")
+            exit(1)
 
     def __init__(self, server, **config):
         Greenlet.__init__(self)
@@ -75,13 +78,13 @@ class RedisReporter(Greenlet):
                         # bleh, messy
                         key = "{}.{}".format(address, worker)
                         if acc:
-                            pipe.hincrbyfloat("acc-min-{}-{}".format(self.config['algo'], stamp), key, acc)
+                            pipe.hincrbyfloat("min_acc_{}_{}".format(self.config['algo'], stamp), key, acc)
                         if dup:
-                            pipe.hincrbyfloat("dup-min-{}-{}".format(self.config['algo'], stamp), key, dup)
+                            pipe.hincrbyfloat("min_dup_{}_{}".format(self.config['algo'], stamp), key, dup)
                         if low:
-                            pipe.hincrbyfloat("low-min-{}-{}".format(self.config['algo'], stamp), key, low)
+                            pipe.hincrbyfloat("min_low_{}_{}".format(self.config['algo'], stamp), key, low)
                         if stale:
-                            pipe.hincrbyfloat("stale-min-{}-{}".format(self.config['algo'], stamp), key, stale)
+                            pipe.hincrbyfloat("min_stale_{}_{}".format(self.config['algo'], stamp), key, stale)
                         pipe.execute()
                 elif name == "add_share":
                     reports = args[0]
@@ -103,6 +106,7 @@ class RedisReporter(Greenlet):
                                         address=address, height=height,
                                         total_subsidy=total_subsidy, fees=fees,
                                         hex_bits=hex_bits, hash=hash,
+                                        algo=self.config['algo'],
                                         **kwargs))
                         pipe.rename(self.config['current_block'], "unproc_block_{}".format(hash))
                         pipe.hset(self.config['current_block'], "start_time", str(time.time()))
