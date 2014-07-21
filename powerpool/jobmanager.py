@@ -410,13 +410,15 @@ class MonitorNetwork(Greenlet):
             self.down_connection(self._poll_connection)
             return False
 
-        # If this was from a push signal and the
-        if signal and self._last_gbt.get('height') != bt['height']:
-            self.logger.info("Push block signal notified us of a new block!")
+        if self._last_gbt.get('height') != bt['height']:
             new_block = True
+        # If this was from a push signal and the
+        if signal and new_block:
+            self.logger.info("Push block signal notified us of a new block!")
         elif signal:
             self.logger.info("Push block signal notified us of a block we "
                              "already know about!")
+            return
 
         # generate a new job if we got some new work!
         if bt != self._last_gbt:
