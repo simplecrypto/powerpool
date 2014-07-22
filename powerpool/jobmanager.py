@@ -36,7 +36,6 @@ class MonitorNetwork(Greenlet):
                            rpc_ping_int=2,
                            pow_block_hash=False,
                            poll=None,
-                           prefix='',
                            coin='',
                            pool_address='',
                            signal=None)
@@ -54,12 +53,12 @@ class MonitorNetwork(Greenlet):
     def __init__(self, server, **config):
         Greenlet.__init__(self)
         self._set_config(**config)
-        self.logger = server.register_logger(self.config['prefix'] + 'jobmanager')
+        self.logger = server.register_logger(self.config['coin'] + 'jobmanager')
 
         # convenient access to global objects
         self.stratum_manager = server.stratum_manager
         self.server = server
-        self.server.register_stat_counters(self.config['prefix'] + s for s in self.one_min_stats)
+        self.server.register_stat_counters(self.config['coin'] + s for s in self.one_min_stats)
         self.reporter = server.reporter
 
         # Aux network monitors (merged mining)
@@ -135,7 +134,7 @@ class MonitorNetwork(Greenlet):
         for key, mon in self.auxmons.iteritems():
             dct[key] = mon.status
 
-        dct.update({key: self.server[self.config['prefix'] + key].summary()
+        dct.update({key: self.server[self.config['coin'] + key].summary()
                     for key in self.one_min_stats})
         return dct
 
@@ -518,10 +517,10 @@ class MonitorNetwork(Greenlet):
 
         if push:
             if flush:
-                self.server[self.config['prefix'] + 'work_restarts'].incr()
-            self.server[self.config['prefix'] + 'work_pushes'].incr()
+                self.server[self.config['coin'] + 'work_restarts'].incr()
+            self.server[self.config['coin'] + 'work_pushes'].incr()
 
-        self.server[self.config['prefix'] + 'new_jobs'].incr()
+        self.server[self.config['coin'] + 'new_jobs'].incr()
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
@@ -603,9 +602,8 @@ class MonitorAuxChain(Greenlet):
         self.current_net = dict(difficulty=None, height=None)
         self.recent_blocks = deque(maxlen=15)
 
-        self.prefix = self.config['name'] + "_"
         # create an instance local one_min_stats for use in the def status func
-        self.one_min_stats = [self.prefix + key for key in self.one_min_stats]
+        self.one_min_stats = [self.coin + "_" + key for key in self.one_min_stats]
         self.server.register_stat_counters(self.one_min_stats)
 
         self.coinservs = self.config['coinservs']
