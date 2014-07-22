@@ -584,30 +584,33 @@ class StratumClient(GenericClient):
             header_hash = sha256(sha256(header).digest()).digest()[::-1]
         hash_hex = hexlify(header_hash)
 
+        # valid network hash?
+        if hash_int <= job.bits_target:
+            spawn(self.jobmanager.found_block,
+                  coinbase_raw,
+                  self.address,
+                  self.worker,
+                  hash_hex,
+                  header,
+                  job.job_id,
+                  start)
+            outcome = self.BLOCK_FOUND
+        else:
+            outcome = self.VALID_SHARE
+
         # check each aux chain for validity
         for chain_id, data in job.merged_data.iteritems():
             if hash_int <= data['target']:
-                self.jobmanager.found_merged_block(self.address,
-                                                   self.worker,
-                                                   hash_hex,
-                                                   header,
-                                                   job.job_id,
-                                                   coinbase_raw,
-                                                   data['type'])
+                spawn(self.jobmanager.found_merged_block,
+                      self.address,
+                      self.worker,
+                      hash_hex,
+                      header,
+                      job.job_id,
+                      coinbase_raw,
+                      data['type'])
 
-        # valid network hash?
-        if hash_int > job.bits_target:
-            return self.VALID_SHARE, difficulty
-
-        self.jobmanager.found_block(coinbase_raw,
-                                    self.address,
-                                    self.worker,
-                                    hash_hex,
-                                    header,
-                                    job.job_id,
-                                    start)
-
-        return self.BLOCK_FOUND, difficulty
+        return outcome, difficulty
 
     def authenticate(self, data):
         try:
