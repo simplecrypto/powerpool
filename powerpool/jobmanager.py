@@ -137,7 +137,7 @@ class MonitorNetwork(Greenlet):
                     for key in self.one_min_stats})
         return dct
 
-    def found_merged_block(self, address, worker, hash_hex, header, job_id, coinbase_raw, typ):
+    def found_merged_block(self, address, worker, header, job_id, coinbase_raw, typ):
         """ Proxy method that sends merged blocks to the AuxChainMonitor for
         submission """
         try:
@@ -145,7 +145,7 @@ class MonitorNetwork(Greenlet):
         except KeyError:
             self.logger.error("Unable to submit block for job id {}, it "
                               "doesn't exist anymore!".format(job_id))
-        self.auxmons[typ].found_block(address, worker, hash_hex, header, coinbase_raw, job)
+        self.auxmons[typ].found_block(address, worker, header, coinbase_raw, job)
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id, start):
         """ Submit a valid block (hopefully!) to the RPC servers """
@@ -617,16 +617,16 @@ class MonitorAuxChain(Greenlet):
                              .format(command, e))
             raise RPCException(e)
 
-    def found_block(self, address, worker, hash_hex, header, coinbase_raw, job):
+    def found_block(self, address, worker, header, coinbase_raw, job):
         aux_data = job.merged_data[self.config['name']]
         self.block_stats['solves'] += 1
-        self.logger.info("New {} Aux block at height {} with hash {}"
-                         .format(self.config['name'], aux_data['height'], hash_hex))
+        self.logger.info("New {} Aux block at height {}"
+                         .format(self.config['name'], aux_data['height']))
         aux_block = (
             pack.IntType(256, 'big').pack(aux_data['hash']).encode('hex'),
             bitcoin_data.aux_pow_type.pack(dict(
                 merkle_tx=dict(
-                    tx=bitcoin_data.tx_type.unpack(job.coinbase.raw),
+                    tx=bitcoin_data.tx_type.unpack(coinbase_raw),
                     block_hash=bitcoin_data.hash256(header),
                     merkle_link=job.merkle_link,
                 ),

@@ -604,7 +604,6 @@ class StratumClient(GenericClient):
                 spawn(self.jobmanager.found_merged_block,
                       self.address,
                       self.worker,
-                      hash_hex,
                       header,
                       job.job_id,
                       coinbase_raw,
