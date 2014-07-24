@@ -753,25 +753,27 @@ class StratumClient(GenericClient):
                 meth = data['method'].lower()
                 if meth == 'mining.subscribe':
                     if self.subscribed is True:
-                        self.send_error()
+                        self.send_error(id_val=self.msg_id)
                         continue
 
                     self.subscribe(data)
                 elif meth == "mining.authorize":
                     if self.subscribed is False:
                         self.server['not_subbed_err'].incr()
-                        self.send_error(25)
+                        self.send_error(25, id_val=self.msg_id)
                         continue
                     if self.authenticated is True:
                         self.server['not_authed_err'].incr()
-                        self.send_error(24)
+                        self.send_error(24, id_val=self.msg_id)
                         continue
 
                     self.authenticate(data)
+                elif meth == "mining.extranonce.subscribe":
+                    self.send_success(id_val=self.msg_id)
                 elif meth == "mining.submit":
                     if self.authenticated is False:
                         self.server['not_authed_err'].incr()
-                        self.send_error(24)
+                        self.send_error(24, id_val=self.msg_id)
                         continue
 
                     outcome, diff = self.submit_job(data)
