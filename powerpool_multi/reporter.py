@@ -189,7 +189,7 @@ class RedisReporter(Greenlet):
                          .format(tot, time_format(time.time() - t)))
         return reports
 
-    def log_share(self, address, worker, amount, typ):
+    def log_share(self, address, worker, amount, typ, job):
         """ Logs a share for a user and user/worker into all three share
         aggregate sources. """
         # log the share for the pool cache total as well
