@@ -159,7 +159,7 @@ class CeleryReporter(Greenlet):
         self.logger.info("One minute shares reported (queued) in {}"
                          .format(time_format(time.time() - t)))
 
-    def log_share(self, address, worker, amount, typ):
+    def log_share(self, address, worker, amount, typ, job):
         """ Logs a share for a user and user/worker into all three share
         aggregate sources. """
         # log the share for the pool cache total as well

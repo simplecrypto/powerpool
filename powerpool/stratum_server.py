@@ -781,7 +781,7 @@ class StratumClient(GenericClient):
                         self.accepted_shares += diff
 
                     # log the share results for aggregation and transmission
-                    self.reporter.log_share(self.address, self.worker, diff, outcome)
+                    self.reporter.log_share(self.address, self.worker, diff, outcome, job)
 
                     # don't recalc their diff more often than interval
                     if (self.config['vardiff'] and
