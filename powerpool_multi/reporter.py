@@ -64,7 +64,6 @@ class RedisReporter(Greenlet):
                          .format("transmit_block", args))
 
     def _run(self):
-        self.share_reporter = spawn(self.report_loop)
         self.one_min_reporter = spawn(self.one_min_loop)
         while True:
             self._queue_proc()
@@ -86,30 +85,22 @@ class RedisReporter(Greenlet):
                         if stale:
                             pipe.hincrbyfloat("min_stale_{}_{}".format(self.config['algo'], stamp), key, stale)
                         pipe.execute()
-                elif name == "add_share":
-                    reports = args[0]
-                    with self.redis.pipeline(transaction=False) as pipe:
-                        for addr, amnt in reports.iteritems():
-                            pipe.hincrbyfloat(self.config['current_block'], addr, amnt)
-                        pipe.execute()
                 elif name == "add_block":
                     address, height, total_subsidy, fees, hex_bits, hash = args
-                    # flush current shares before solving block
-                    reports = self._report_shares()
+                    if 'merged' in kwargs:
+                        block_key = 'current_block_{}'.format(kwargs['merged'])
+                    else:
+                        block_key = self.config['current_block']
                     with self.redis.pipeline(transaction=False) as pipe:
-                        if reports:
-                            for addr, amnt in reports.iteritems():
-                                pipe.hincrbyfloat(self.config['current_block'], addr, amnt)
-
-                        pipe.hmset(self.config['current_block'],
+                        pipe.hmset(block_key,
                                    dict(solve_time=str(time.time()),
                                         address=address, height=height,
                                         total_subsidy=total_subsidy, fees=fees,
                                         hex_bits=hex_bits, hash=hash,
                                         algo=self.config['algo'],
                                         **kwargs))
-                        pipe.rename(self.config['current_block'], "unproc_block_{}".format(hash))
-                        pipe.hset(self.config['current_block'], "start_time", str(time.time()))
+                        pipe.rename(block_key, "unproc_block_{}".format(hash))
+                        pipe.hset(block_key, "start_time", str(time.time()))
                         pipe.execute()
                 else:
                     self.logger.error("Invalid queue item added!")
@@ -122,16 +113,6 @@ class RedisReporter(Greenlet):
                 self.queue.get()
             else:
                 self.queue.get()
-
-    def report_loop(self):
-        """ Repeatedly do our share reporting on an interval """
-        while True:
-            sleep(self.config['share_batch_interval'])
-            try:
-                reports = self._report_shares()
-                self.queue.put(('add_share', (reports, ), {}))
-            except Exception:
-                self.logger.error("Unhandled error in report shares", exc_info=True)
 
     def one_min_loop(self):
         """ Repeatedly do our share reporting on an interval """
@@ -168,33 +149,12 @@ class RedisReporter(Greenlet):
         self.logger.info("One minute shares reported (queued) in {}"
                          .format(time_format(time.time() - t)))
 
-    def _report_shares(self):
-        self.logger.info("Reporting shares for {:,} users"
-                         .format(len(self.addresses)))
-        t = time.time()
-        reports = {}
-        tot = 0.0
-        for address, tracker in self.addresses.items():
-            ret = tracker.report()
-            if ret:
-                reports[ret[0]] = ret[1]
-                tot += ret[1]
-
-            # if the last log time was more than expiry time ago...
-            if (tracker.last_log + self.config['tracker_expiry_time']) < t:
-                assert tracker.unreported == 0
-                del self.addresses[address]
-
-        self.logger.info("{} Shares iterated in {}"
-                         .format(tot, time_format(time.time() - t)))
-        return reports
-
     def log_share(self, address, worker, amount, typ, job):
         """ Logs a share for a user and user/worker into all three share
         aggregate sources. """
         # log the share for the pool cache total as well
         if address != "pool" and self.config['report_pool_stats']:
-            self.log_share("pool", '', amount, typ)
+            self.log_share("pool", '', amount, typ, job)
 
         # collecting for reporting to the website for display in graphs
         addr_worker = (address, worker)
@@ -203,15 +163,19 @@ class RedisReporter(Greenlet):
         self.workers[(address, worker)].count_share(amount, typ)
 
         # reporting for payout share logging and vardiff rates
-        if typ == StratumClient.VALID_SHARE and address != "pool":
+        if (typ == StratumClient.VALID_SHARE or typ == StratumClient.BLOCK_FOUND) and address != "pool":
             if address not in self.addresses:
                 self.addresses[address] = RedisAddressTracker(self, address)
             # for tracking vardiff speeds
             self.addresses[address].count_share(amount)
+            with self.redis.pipeline(transaction=False) as pipe:
+                for currency in job.merged_data:
+                    pipe.hincrbyfloat('current_block_' + currency, address, amount)
+                pipe.hincrbyfloat(self.config['current_block'], address, amount)
+                pipe.execute()
 
     def kill(self, *args, **kwargs):
         self.share_reporter.kill(*args, **kwargs)
-        self._report_shares()
         self._report_one_min(flush=True)
         self.logger.info("Flushing the reporter task queue, {} items blocking "
                          "exit".format(self.queue.qsize()))
@@ -224,9 +188,9 @@ class RedisReporter(Greenlet):
 class RedisAddressTracker(AddressTracker):
     """ Records stats about an address and tracks all associated stratum
     connections. """
-    def report(self):
-        # Clear it before running a block call that might context switch...
-        val = self.unreported
-        self.unreported = 0
-        if val != 0:
-            return self.address, val
+    def count_share(self, amount):
+        curr = time.time()
+        t = (int(curr) // 60) * 60
+        self.minutes.setdefault(t, 0)
+        self.minutes[t] += amount
+        self.last_log = curr
