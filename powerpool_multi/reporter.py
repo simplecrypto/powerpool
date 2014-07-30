@@ -31,7 +31,7 @@ class RedisReporter(Greenlet):
         # setup our celery agent and monkey patch
         self.redis = Redis(**self.config['redis'])
 
-        self.share_reporter = None
+        self.one_min_reporter = None
 
         self.server = server
         self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
@@ -175,7 +175,7 @@ class RedisReporter(Greenlet):
                 pipe.execute()
 
     def kill(self, *args, **kwargs):
-        self.share_reporter.kill(*args, **kwargs)
+        self.one_min_reporter.kill(*args, **kwargs)
         self._report_one_min(flush=True)
         self.logger.info("Flushing the reporter task queue, {} items blocking "
                          "exit".format(self.queue.qsize()))
