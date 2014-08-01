@@ -86,7 +86,7 @@ class StratumManager(object):
                                       accepted_types=['temp', 'status', 'hashrate', 'thresholds']))
         recursive_update(self.config, config)
 
-        if not get_bcaddress_version(self.config['donate_address']):
+        if get_bcaddress_version(self.config['donate_address']) is None:
             self.logger.error("No valid donation address configured! Exiting.")
             exit()
 
