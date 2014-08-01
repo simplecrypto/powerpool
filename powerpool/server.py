@@ -33,7 +33,7 @@ class GenericClient(object):
         except Exception:
             version = False
 
-        if version:
+        if version is not False:
             address = username
         else:
             filtered = re.sub('[\W_]+', '', username).lower()
