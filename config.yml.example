@@ -72,7 +72,7 @@ jobmanager:
          # signal: null
          # how we id the block type to celery
          reporting_id: PLX
-         coinserv:
+         coinservs:
              - port: 1234
                address: 127.0.0.1
                username:
@@ -94,7 +94,7 @@ jobmanager:
          # signal: null
          # how we id the block type to celery
          reporting_id: MON
-         coinserv:
+         coinservs:
              - port: 1234
                address: 127.0.0.1
                username:
