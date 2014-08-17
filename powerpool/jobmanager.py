@@ -640,6 +640,7 @@ class MonitorAuxChain(Greenlet):
         while retries < 5:
             retries += 1
             new_height = aux_data['height'] + 1
+            res = False
             try:
                 res = self.coinserv.getauxblock(*aux_block)
             except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
