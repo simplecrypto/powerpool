@@ -643,7 +643,7 @@ class MonitorAuxChain(Greenlet):
             try:
                 res = self.coinserv.getauxblock(*aux_block)
             except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
-                self.logger.error("{} Aux block failed to submit to the server {}!"
+                self.logger.error("{} Aux block failed to submit to the server!"
                                   .format(self.config['name']), exc_info=True)
                 self.logger.error(getattr(e, 'error'))
 
