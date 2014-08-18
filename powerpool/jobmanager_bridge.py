@@ -3,7 +3,6 @@ import zmq
 from time import sleep
 from gevent import Greenlet, spawn
 from cryptokit.block import BlockTemplate
-from future.utils import viewitems
 
 
 class ZeroMQJobBridge(Greenlet):
@@ -45,7 +44,7 @@ class ZeroMQJobBridge(Greenlet):
         new_job.__dict__.update(job_data)
 
         if push:
-            for idx, client in viewitems(self.stratum_manager.clients):
+            for idx, client in self.stratum_manager.clients.iteritems():
                 try:
                     if flush:
                         client.new_block_event.set()

@@ -1,11 +1,24 @@
-six
-git+https://github.com/icook/python-bitcoinrpc.git
-git+https://github.com/icook/cryptokit.git
-gevent
-pyyaml
-celery
+# Top level requirements
+git+https://github.com/icook/python-bitcoinrpc.git@ab18fabd78dce5ae0ca8f53b3414f41e992b6bc0#egg=python-bitcoinrpc
+git+https://github.com/simplecrypto/cryptokit.git@v0.2.6#egg=cryptokit
+gevent==1.0.1
+pyyaml==3.10
+celery==3.1.9
+Flask==0.10.1
+setproctitle==1.1.8
+
+# Dependencies of top level req
+Jinja2==2.7.3
+MarkupSafe==0.23
+Werkzeug==0.9.6
+amqp==1.4.6
+anyjson==0.3.3
+argparse==1.2.1
+billiard==3.3.0.18
 future==0.11.2
-Flask
-psutil
-setproctitle
-pyzmq
+greenlet==0.4.3
+itsdangerous==0.24
+kombu==3.0.21
+pytz==2014.4
+urllib3==1.9
+wsgiref==0.1.2

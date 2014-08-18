@@ -6,7 +6,6 @@ import socket
 import time
 import datetime
 
-from future.utils import viewitems
 from binascii import unhexlify, hexlify
 from collections import deque
 from cryptokit import bits_to_difficulty
@@ -547,7 +546,7 @@ class MonitorNetwork(Greenlet):
         if push:
             t = time.time()
             bt_obj.stratum_string()
-            for idx, client in viewitems(self.stratum_manager.clients):
+            for idx, client in self.stratum_manager.clients.iteritems():
                 try:
                     if client.authenticated:
                         client._push(bt_obj, flush=flush)
