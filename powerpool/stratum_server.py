@@ -18,6 +18,7 @@ from os import urandom
 from pprint import pformat
 
 from .server import GenericServer, GenericClient
+from .utils import import_helper
 from .agent_server import AgentServer
 from .utils import recursive_update
 
@@ -80,6 +81,10 @@ class StratumManager(object):
                            donate_address='',
                            idle_worker_threshold=300,
                            idle_worker_disconnect_threshold=3600,
+                           algorithms=dict(x11="drk_hash.getPoWHash",
+                                           scrypt="ltc_scrypt.getPoWHash",
+                                           scryptn="vtc_scrypt.getPoWHash",
+                                           sha256="cryptokit.sha256d"),
                            agent=dict(enabled=False,
                                       port_diff=1111,
                                       timeout=120,
@@ -119,31 +124,15 @@ class StratumManager(object):
         self.server = server
         self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
 
-        # Detect and load all the hash functions we can find
         self.algos = {}
-        try:
-            from drk_hash import getPoWHash
-        except ImportError:
-            pass
-        else:
-            self.logger.info("Enabling x11 hashing algorithm module")
-            self.algos['x11'] = getPoWHash
-
-        try:
-            from ltc_scrypt import getPoWHash
-        except ImportError:
-            pass
-        else:
-            self.logger.info("Enabling scrypt hashing algorithm module")
-            self.algos['scrypt'] = getPoWHash
-
-        try:
-            from vtc_scrypt import getPoWHash
-        except ImportError:
-            pass
-        else:
-            self.logger.info("Enabling scrypt-n hashing algorithm module")
-            self.algos['scryptn'] = getPoWHash
+        # Detect and load all the hash functions we can find
+        for name, module_str in self.config['algorithms'].iteritems():
+            try:
+                self.algos[name] = import_helper(module_str)
+            except ImportError:
+                continue
+            self.logger.info("Enabling {} hashing algorithm from module {}"
+                             .format(name, module_str))
 
         # create a single default stratum server if none are defined
         if not self.config['interfaces']:

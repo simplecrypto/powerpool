@@ -588,6 +588,7 @@ class MonitorAuxChain(Greenlet):
     def __init__(self, server, jobmanager, **config):
         Greenlet.__init__(self)
         self._set_config(**config)
+        self.prefix = self.config['name'] + "_"
         self.jobmanager = jobmanager
         self.server = server
         self.reporter = server.reporter
@@ -602,7 +603,7 @@ class MonitorAuxChain(Greenlet):
         self.recent_blocks = deque(maxlen=15)
 
         # create an instance local one_min_stats for use in the def status func
-        self.one_min_stats = [self.coin + "_" + key for key in self.one_min_stats]
+        self.one_min_stats = [self.prefix + key for key in self.one_min_stats]
         self.server.register_stat_counters(self.one_min_stats)
 
         self.coinservs = self.config['coinservs']

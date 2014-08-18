@@ -169,6 +169,14 @@ stratum:
         #  start_difficulty: 256
         #  # whether our this port will be vardiff enabled
         #  vardiff: True
+    
+    # A list of modules and hashing algorithms that you'd like to attempt to
+    # load on startup.
+    #algorithms:
+    #      x11: drk_hash.getPoWHash
+    #      scrypt: ltc_scrypt.getPoWHash
+    #      scryptn: vtc_scrypt.getPoWHash
+    #      sha256: cryptokit.sha256d
 
     # This should be a list of valid "versions" for addresses. Each altcoin has
     # a unique "version" number that can be checked. use
