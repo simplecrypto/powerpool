@@ -514,7 +514,7 @@ class StratumClient(GenericClient):
             self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_stale'].incr(self.difficulty)
             self.server['reject_stale_shares'].incr()
-            return self.STALE_SHARE, self.difficulty
+            return self.STALE_SHARE, self.difficulty, None
 
         # lookup the job in the global job dictionary. If it's gone from here
         # then a new block was announced which wiped it
@@ -524,7 +524,7 @@ class StratumClient(GenericClient):
             self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_stale'].incr(difficulty)
             self.server['reject_stale_shares'].incr()
-            return self.STALE_SHARE, difficulty
+            return self.STALE_SHARE, difficulty, job
 
         # assemble a complete block header bytestring
         header = job.block_header(
@@ -545,7 +545,7 @@ class StratumClient(GenericClient):
             self.send_error(self.DUP_SHARE_ERR, id_val=self.msg_id)
             self.server['reject_dup'].incr(difficulty)
             self.server['reject_dup_shares'].incr()
-            return self.DUP_SHARE, difficulty
+            return self.DUP_SHARE, difficulty, job
 
         job_target = target_from_diff(difficulty, job.diff1)
         hash_int = uint256_from_str(self.algos[job.algo](header))
@@ -555,7 +555,7 @@ class StratumClient(GenericClient):
             self.send_error(self.LOW_DIFF_ERR, id_val=self.msg_id)
             self.server['reject_low'].incr(difficulty)
             self.server['reject_low_shares'].incr()
-            return self.LOW_DIFF, difficulty
+            return self.LOW_DIFF, difficulty, job
 
         # we want to send an ack ASAP, so do it here
         self.send_success(id_val=self.msg_id)
@@ -599,7 +599,7 @@ class StratumClient(GenericClient):
                       coinbase_raw,
                       data['type'])
 
-        return outcome, difficulty
+        return outcome, difficulty, job
 
     def authenticate(self, data):
         try:
@@ -766,7 +766,7 @@ class StratumClient(GenericClient):
                         self.send_error(24, id_val=self.msg_id)
                         continue
 
-                    outcome, diff = self.submit_job(data)
+                    outcome, diff, job = self.submit_job(data)
                     if self.VALID_SHARE == outcome or self.BLOCK_FOUND == outcome:
                         self.accepted_shares += diff
 
