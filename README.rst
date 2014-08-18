@@ -12,18 +12,18 @@ Features
 * Lightweight, asynchronous, gevent based internals.
 * Built in HTTP statistics/monitoring server.
 * Flexible statistics collection engine.
-* Multiple coinserver support for redundancy. Support for coinserver prioritization.
+* Multiple coinserver (RPC server) support for redundancy. Support for coinserver prioritization.
 * Celery driven share logging allows multiple servers to log shares and
   statistics to a central source for easy scaling out.
 * SHA256, X11, scrypt, and scrypt-n support
 * Support for merge mining multiple auxilury (merge mined) blockchains
-* Modular architecture makes customization simple
+* Modular architecture makes customization simple(r)
 
 Uses `Celery <http://www.celeryproject.org/>`_ to log shares and statistics for
-miners. Work generation and (bit|lite)coin data structure serialization is
+miners. Work generation and (bit|lite|alt)coin data structure serialization is
 performed by `Cryptokit <https://github.com/icook/cryptokit>`_ and connects to
-bitcoind using GBT for work generation. Currently uses Python 2.7 because
-Gevent doesn't support 3.3.
+bitcoind using GBT for work generation (or getauxblock for merged work).
+Currently only Python 2.7 is supported.
 
 Built to power the `SimpleDoge <http://simpledoge.com>`_ mining pool.
 
@@ -56,28 +56,31 @@ Setup a virtualenv and install...
 
 .. code-block:: bash
 
-    # if you've got virtualenvwrapper...
-    mkvirtualenv pp
+    mkvirtualenv pp  # if you've got virtualenvwrapper...
+    # Install all of powerpools dependencies
     pip install -r requirements.txt
+    # Install powerpool
     pip install -e .
+    # Install the hashing algorithm modules
     pip install vtc_scrypt  # for scryptn support
     pip install drk_hash  # for x11 support
     pip install ltc_scrypt  # for scrypt support
 
 Now copy ``config.yml.example`` to ``config.yml``. All the defaults are
-commented out and mandatory fields are uncommented. Fill our your coinserver
-RPC connection information at the top. It should now be good to go.
+commented out and mandatory fields are uncommented. Fill out all required fields
+and you should be good to go for testing.
 
 .. code-block:: bash
 
     pp config.yml
 
 And now your stratum server is running. Point a miner at it on
-``localhost:3333`` and do some mining. View server health on the monitor port
-at ``http://localhost:3855``. Various events will be getting logged
-into RabbitMQ to be picked up by a celery worker. See `Simple Coin
-<https://github.com/simplecrypto/simplecoin>`_ for a reference task handling
-example.
+``localhost:3333`` (or more specifically, ``stratum+tcp://localhost:3333`` and
+do some mining. View server health on the monitor port at
+``http://localhost:3855``. Various events will be getting logged into RabbitMQ
+to be picked up by a celery worker. See `Simple Coin
+<https://github.com/simplecrypto/simplecoin>`_ for a reference implementation
+of Celery task handler.
 
 ========================
 Architecture Overview
