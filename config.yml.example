@@ -22,7 +22,7 @@ powerpool:
 # blocks to rpc servers, and pushing new block notifications to clients
 jobmanager:
     # The class we'll load and provide the following configuration
-    type: powerpool.jobmanager.MonitorNetwork
+    type: powerpool.jobmanagers.MonitorNetwork
 
     # should we poll the RPC server for new blocks? True will force polling,
     # null will poll if push notifications are disabled, and False will force
@@ -135,7 +135,7 @@ jobmanager:
 
 # Reporter handles communication of new shares, block, etc for recording.
 reporter:
-    type: powerpool.reporter.CeleryReporter
+    type: powerpool.reporters.CeleryReporter
     # this defines the celery options that get passed to the daemon. this should
     # define how to connect to the queue server, etc
     #celery: 
