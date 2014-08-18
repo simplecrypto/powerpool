@@ -1,11 +1,10 @@
 import time
 
 from gevent import sleep, Greenlet, spawn
-from redis import Redis, RedisError
 from gevent.queue import Queue
-from .reporters import WorkerTracker, AddressTracker, Reporter
-from .stratum_server import StratumClient
-from .utils import time_format
+from . import WorkerTracker, AddressTracker, Reporter
+from ..stratum_server import StratumClient
+from ..utils import time_format
 
 
 class RedisReporter(Reporter):
@@ -29,6 +28,8 @@ class RedisReporter(Reporter):
         self._set_config(**config)
 
         # setup our celery agent and monkey patch
+        global RedisError
+        from redis import Redis, RedisError
         self.redis = Redis(**self.config['redis'])
 
         self.one_min_reporter = None

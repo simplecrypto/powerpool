@@ -2,11 +2,10 @@ import time
 
 from gevent import Greenlet, sleep, spawn
 from gevent.queue import Queue
-from celery import Celery
 
-from .reporters import WorkerTracker, AddressTracker, Reporter
-from .utils import time_format
-from .stratum_server import StratumClient
+from . import WorkerTracker, AddressTracker, Reporter
+from ..utils import time_format
+from ..stratum_server import StratumClient
 
 
 class CeleryReporter(Reporter):
@@ -32,6 +31,7 @@ class CeleryReporter(Reporter):
         self._set_config(**config)
 
         # setup our celery agent and monkey patch
+        from celery import Celery
         self.celery = Celery()
         self.celery.conf.update(self.config['celery'])
 
@@ -143,7 +143,7 @@ class CeleryReporter(Reporter):
         aggregate sources. """
         # log the share for the pool cache total as well
         if address != "pool" and self.config['report_pool_stats']:
-            self.log_share("pool", '', amount, typ)
+            self.log_share("pool", '', amount, typ, job)
 
         # collecting for reporting to the website for display in graphs
         addr_worker = (address, worker)

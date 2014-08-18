@@ -9,14 +9,14 @@ import datetime
 from binascii import unhexlify, hexlify
 from collections import deque
 from cryptokit import bits_to_difficulty
-from cryptokit.jobmanaagers import MonitorAuxNetwork, RPCException
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from cryptokit.bitcoin import data as bitcoin_data
 from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, Greenlet, spawn
 
-from .utils import time_format
+from . import MonitorAuxNetwork, RPCException
+from ..utils import time_format
 
 
 class MonitorNetwork(Greenlet):

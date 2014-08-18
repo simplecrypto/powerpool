@@ -6,10 +6,11 @@ import time
 import datetime
 
 from collections import deque
-from cryptokit.jobmanaagers import RPCException
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep, Greenlet
+
+from . import RPCException
 
 
 class MonitorAuxNetwork(Greenlet):
