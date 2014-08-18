@@ -1,6 +1,5 @@
 # Top level requirements
-git+https://github.com/icook/python-bitcoinrpc.git@ab18fabd78dce5ae0ca8f53b3414f41e992b6bc0#egg=python-bitcoinrpc
-git+https://github.com/simplecrypto/cryptokit.git@v0.2.6#egg=cryptokit
+git+https://github.com/simplecrypto/cryptokit.git@v0.2.8#egg=cryptokit
 gevent==1.0.1
 pyyaml==3.10
 celery==3.1.9

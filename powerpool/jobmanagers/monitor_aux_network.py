@@ -1,10 +1,10 @@
-import bitcoinrpc
 import urllib3
 import gevent
 import socket
 import time
 import datetime
 
+from cryptokit.rpc import CoinserverRPC, CoinRPCException
 from collections import deque
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
@@ -59,7 +59,7 @@ class MonitorAuxNetwork(Greenlet):
         self.server.register_stat_counters(self.one_min_stats)
 
         self.coinservs = self.config['coinservs']
-        self.coinserv = bitcoinrpc.AuthServiceProxy(
+        self.coinserv = CoinserverRPC(
             "http://{0}:{1}@{2}:{3}/"
             .format(self.coinservs[0]['username'],
                     self.coinservs[0]['password'],
@@ -74,7 +74,7 @@ class MonitorAuxNetwork(Greenlet):
     def call_rpc(self, command, *args, **kwargs):
         try:
             return getattr(self.coinserv, command)(*args, **kwargs)
-        except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
+        except (urllib3.exceptions.HTTPError, CoinRPCException) as e:
             self.logger.warn("Unable to perform {} on RPC server. Got: {}"
                              .format(command, e))
             raise RPCException(e)
@@ -105,7 +105,7 @@ class MonitorAuxNetwork(Greenlet):
             res = False
             try:
                 res = self.coinserv.getauxblock(*aux_block)
-            except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+            except (CoinRPCException, socket.error, ValueError) as e:
                 self.logger.error("{} Aux block failed to submit to the server!"
                                   .format(self.config['name']), exc_info=True)
                 self.logger.error(getattr(e, 'error'))

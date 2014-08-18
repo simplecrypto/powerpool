@@ -1,4 +1,3 @@
-import bitcoinrpc
 import struct
 import urllib3
 import gevent
@@ -9,6 +8,7 @@ import datetime
 from binascii import unhexlify, hexlify
 from collections import deque
 from cryptokit import bits_to_difficulty
+from cryptokit.rpc import CoinserverRPC, CoinRPCException
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from cryptokit.bitcoin import data as bitcoin_data
@@ -107,7 +107,7 @@ class MonitorNetwork(Greenlet):
             self.auxmons[coin['name']] = aux_network
 
         for serv in self.config['main_coinservs']:
-            conn = bitcoinrpc.AuthServiceProxy(
+            conn = CoinserverRPC(
                 "http://{0}:{1}@{2}:{3}/"
                 .format(serv['username'],
                         serv['password'],
@@ -189,14 +189,14 @@ class MonitorNetwork(Greenlet):
                 res = "failed"
                 try:
                     res = conn.submitblock(block)
-                except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+                except (CoinRPCException, socket.error, ValueError) as e:
                     self.logger.info("Block failed to submit to the server {} with submitblock! {}"
                                      .format(conn.name, e))
                     if getattr(e, 'error', {}).get('code', 0) != -8:
                         self.logger.error(getattr(e, 'error'), exc_info=True)
                     try:
                         res = conn.getblocktemplate({'mode': 'submit', 'data': block})
-                    except (bitcoinrpc.CoinRPCException, socket.error, ValueError) as e:
+                    except (CoinRPCException, socket.error, ValueError) as e:
                         self.logger.error("Block failed to submit to the server {}!"
                                           .format(conn.name), exc_info=True)
                         self.logger.error(getattr(e, 'error'))
@@ -255,7 +255,7 @@ class MonitorNetwork(Greenlet):
     def call_rpc(self, command, *args, **kwargs):
         try:
             return getattr(self.coinserv, command)(*args, **kwargs)
-        except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException) as e:
+        except (urllib3.exceptions.HTTPError, CoinRPCException) as e:
             self.logger.warn("Unable to perform {} on RPC server. Got: {}"
                              .format(command, e))
             self.down_connection(self._poll_connection)
@@ -293,7 +293,7 @@ class MonitorNetwork(Greenlet):
             for conn in self._down_connections:
                 try:
                     conn.getinfo()
-                except (urllib3.exceptions.HTTPError, bitcoinrpc.CoinRPCException, ValueError):
+                except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
                     self.logger.info("RPC connection {} still down!".format(conn.name))
                     continue
 
