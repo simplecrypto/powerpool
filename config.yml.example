@@ -72,6 +72,10 @@ jobmanager:
          # signal: null
          # how we id the block type to celery
          reporting_id: PLX
+         # A list of coinservers to get work from and submit blocks to. Note
+         # that unlike main coinservers, prioritization and multiple
+         # coinservers is currently not supported, although there are plans to
+         # add it in the future.
          coinservs:
              - port: 1234
                address: 127.0.0.1
@@ -94,6 +98,10 @@ jobmanager:
          # signal: null
          # how we id the block type to celery
          reporting_id: MON
+         # A list of coinservers to get work from and submit blocks to. Note
+         # that unlike main coinservers, prioritization and multiple
+         # coinservers is currently not supported, although there are plans to
+         # add it in the future.
          coinservs:
              - port: 1234
                address: 127.0.0.1
