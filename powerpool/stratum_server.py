@@ -84,6 +84,7 @@ class StratumManager(object):
                            algorithms=dict(x11="drk_hash.getPoWHash",
                                            scrypt="ltc_scrypt.getPoWHash",
                                            scryptn="vtc_scrypt.getPoWHash",
+                                           blake256="blake_hash.getPoWHash",
                                            sha256="cryptokit.sha256d"),
                            agent=dict(enabled=False,
                                       port_diff=1111,

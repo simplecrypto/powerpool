@@ -177,6 +177,7 @@ stratum:
     #      scrypt: ltc_scrypt.getPoWHash
     #      scryptn: vtc_scrypt.getPoWHash
     #      sha256: cryptokit.sha256d
+    #      blake256: blake_hash.getPoWHash
 
     # This should be a list of valid "versions" for addresses. Each altcoin has
     # a unique "version" number that can be checked. use
