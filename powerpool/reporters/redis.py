@@ -3,12 +3,12 @@ import time
 from gevent import sleep, Greenlet, spawn
 from redis import Redis, RedisError
 from gevent.queue import Queue
-from powerpool.reporter import WorkerTracker, AddressTracker
-from powerpool.stratum_server import StratumClient
-from powerpool.utils import time_format
+from .reporters import WorkerTracker, AddressTracker, Reporter
+from .stratum_server import StratumClient
+from .utils import time_format
 
 
-class RedisReporter(Greenlet):
+class RedisReporter(Reporter):
     one_min_stats = []
     one_sec_stats = ['queued']
 
