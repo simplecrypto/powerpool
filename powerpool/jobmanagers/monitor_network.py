@@ -13,33 +13,32 @@ from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from cryptokit.bitcoin import data as bitcoin_data
 from cryptokit.base58 import get_bcaddress_version
-from gevent import sleep, Greenlet, spawn
+from gevent import sleep, spawn
 
 from . import MonitorAuxNetwork, RPCException
+from ..lib import Component, loop, manager
 from ..utils import time_format
 
 
-class MonitorNetwork(Greenlet):
+class MonitorNetwork(Component):
     one_min_stats = ['work_restarts', 'new_jobs', 'work_pushes']
+    defaults = config = dict(coinserv=None,
+                             extranonce_serv_size=8,
+                             extranonce_size=4,
+                             diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
+                             hashes_per_share=0xFFFF,
+                             merged=None,
+                             block_poll=0.2,
+                             job_refresh=15,
+                             rpc_ping_int=2,
+                             pow_block_hash=False,
+                             poll=None,
+                             currency='',
+                             pool_address='',
+                             signal=None)
 
-    def _set_config(self, **kwargs):
-        # A fast way to set defaults for the kwargs then set them as attributes
-        self.config = dict(coinserv=None,
-                           extranonce_serv_size=8,
-                           extranonce_size=4,
-                           diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
-                           hashes_per_share=0xFFFF,
-                           merged=None,
-                           block_poll=0.2,
-                           job_refresh=15,
-                           rpc_ping_int=2,
-                           pow_block_hash=False,
-                           poll=None,
-                           coin='',
-                           pool_address='',
-                           signal=None)
-        self.config.update(kwargs)
-
+    def _configure(self, config):
+        super(MonitorNetwork, self)._configure(config)
         if not get_bcaddress_version(self.config['pool_address']):
             self.logger.error("No valid pool address configured! Exiting.")
             exit()
@@ -49,16 +48,14 @@ class MonitorNetwork(Greenlet):
             self.logger.error("Shit won't work without a coinserver to connect to")
             exit()
 
-    def __init__(self, server, **config):
-        Greenlet.__init__(self)
-        self._set_config(**config)
-        self.logger = server.register_logger(self.config['coin'] + 'jobmanager')
+        # check that we have at least one configured coin server
+        if not self.config['currency']:
+            self.logger.error("Must define a currency")
+            exit()
 
+    def _setup(self):
         # convenient access to global objects
-        self.stratum_manager = server.stratum_manager
-        self.server = server
-        self.server.register_stat_counters(self.config['coin'] + s for s in self.one_min_stats)
-        self.reporter = server.reporter
+        self.gl_methods = ['_monitor_nodes', '_check_new_jobs']
 
         # Aux network monitors (merged mining)
         self.auxmons = {}
@@ -102,7 +99,7 @@ class MonitorNetwork(Greenlet):
 
             self.logger.info("Aux network monitor for {} starting up"
                              .format(coin['name']))
-            aux_network = MonitorAuxNetwork(server, self, **coin)
+            aux_network = MonitorAuxNetwork(manager, self, **coin)
             aux_network.start()
             self.auxmons[coin['name']] = aux_network
 
@@ -123,6 +120,9 @@ class MonitorNetwork(Greenlet):
                              .format(self.config['signal']))
             gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
 
+        if (not self.config['signal'] and self.config['poll'] is None) or self.config['poll']:
+            self.gl_methods.append('_poll_height')
+
     @property
     def status(self):
         """ For display in the http monitor """
@@ -133,8 +133,7 @@ class MonitorNetwork(Greenlet):
         for key, mon in self.auxmons.iteritems():
             dct[key] = mon.status
 
-        dct.update({key: self.server[self.config['coin'] + key].summary()
-                    for key in self.one_min_stats})
+        dct.update({key: val.summary() for key, val in self.counters.iteritems()})
         return dct
 
     def found_merged_block(self, address, worker, header, job_id, coinbase_raw, typ):
@@ -170,15 +169,17 @@ class MonitorNetwork(Greenlet):
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
                     dict(height=job.block_height, timestamp=int(time.time())))
-                self.reporter.add_block(
-                    address,
-                    job.block_height,
-                    job.total_value,
-                    job.fee_total,
-                    hexlify(job.bits),
-                    hash_hex,
+                manager.reporter.add_block(
+                    address=address,
+                    height=job.block_height,
+                    total_subsidy=job.total_value,
+                    fees=job.fee_total,
+                    hex_bits=hexlify(job.bits),
+                    hex_hash=hash_hex,
                     worker=worker,
-                    currency=self.config['coin'])
+                    algo=job.algo,
+                    merged=False,
+                    currency=self.config['currency'])
             else:
                 self.block_stats['rejects'] += 1
 
@@ -319,59 +320,30 @@ class MonitorNetwork(Greenlet):
 
             sleep(self.config['rpc_ping_int'])
 
-    def kill(self, *args, **kwargs):
-        """ Override our default kill method and kill our child greenlets as
-        well """
-        self.logger.info("Network monitoring jobmanager shutting down...")
-        self._node_monitor.kill(*args, **kwargs)
-        if self._height_poller:
-            self.logger.info("Killing height poller...")
-            self._height_poller.kill(*args, **kwargs)
-        # stop all greenlets
-        for gl in self.auxmons.itervalues():
-            gl.kill(timeout=kwargs.get('timeout'), block=False)
-        Greenlet.kill(self, *args, **kwargs)
+    @loop()
+    def _check_new_jobs(self):
+        print "checking for new job!"
+        if self._poll_connection is None:
+            self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+            sleep(1)
+            return
 
-    def _run(self):
-        self.logger.info("Network monitoring jobmanager starting up...")
-        # start watching our nodes to see if they're up or not
-        self._node_monitor = spawn(self._monitor_nodes)
-        if (not self.config['signal'] and self.config['poll'] is None) or self.config['poll']:
-            self.logger.info("No push block notif signal defined, polling RPC "
-                             "server every {} seconds".format(self.config['block_poll']))
-            self._height_poller = spawn(self._poll_height)
+        self.getblocktemplate()
+        sleep(self.config['job_refresh'])
 
-        while True:
-            try:
-                if self._poll_connection is None:
-                    self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
-                    sleep(1)
-                    continue
-
-                self.getblocktemplate()
-            except Exception:
-                self.logger.error("Unhandled exception!", exc_info=True)
-                pass
-
-            sleep(self.config['job_refresh'])
-
+    @loop()
     def _poll_height(self):
-        while True:
-            try:
-                if self._poll_connection is None:
-                    self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
-                    sleep(1)
-                    continue
+        if self._poll_connection is None:
+            self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
+            sleep(1)
+            return
 
-                # if there's a new block registered
-                if self.check_height():
-                    self.logger.info("New block on main network detected")
-                    # dump the current transaction pool, refresh and push the
-                    # event
-                    self.getblocktemplate(new_block=True)
-            except Exception:
-                self.logger.error("Unhandled exception!", exc_info=True)
-                pass
+        # if there's a new block registered
+        if self.check_height():
+            self.logger.info("New block on main network detected")
+            # dump the current transaction pool, refresh and push the
+            # event
+            self.getblocktemplate(new_block=True)
 
             sleep(self.config['block_poll'])
 
@@ -404,7 +376,7 @@ class MonitorNetwork(Greenlet):
                     'prevblock',
                 ]})
         except Exception as e:
-            self.logger.warn("Failed to fetch new job. Reason: {}".format(e))
+            self.logger.warn("Failed to fetch new job. Reason: {}".format(e), exc_info=True)
             self.down_connection(self._poll_connection)
             return False
 
@@ -510,16 +482,17 @@ class MonitorNetwork(Greenlet):
         bt_obj.job_id = job_id
         bt_obj.diff1 = self.config['diff1']
         bt_obj.algo = self.config['algo']
+        bt_obj.currency = self.config['currency']
         bt_obj.pow_block_hash = self.config['pow_block_hash']
         bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
 
         if push:
             if flush:
-                self.server[self.config['coin'] + 'work_restarts'].incr()
-            self.server[self.config['coin'] + 'work_pushes'].incr()
+                self._incr('work_restarts')
+            self._incr('work_pushes')
 
-        self.server[self.config['coin'] + 'new_jobs'].incr()
+        self._incr('new_jobs')
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
@@ -546,12 +519,12 @@ class MonitorNetwork(Greenlet):
         if push:
             t = time.time()
             bt_obj.stratum_string()
-            for idx, client in self.stratum_manager.clients.iteritems():
+            for idx, client in manager.stratum.clients.iteritems():
                 try:
                     if client.authenticated:
                         client._push(bt_obj, flush=flush)
                 except AttributeError:
                     pass
             self.logger.info("New job enqueued for transmission to {} users in {}"
-                             .format(len(self.stratum_manager.clients),
+                             .format(len(manager.stratum.clients),
                                      time_format(time.time() - t)))

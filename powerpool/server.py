@@ -1,15 +1,8 @@
-from gevent.server import StreamServer
 from cryptokit.base58 import get_bcaddress_version
 
 import datetime
 import re
 import socket
-
-
-class GenericServer(StreamServer):
-    def task_exc(self, name, *args, **kwargs):
-        self.net_state['celery'].send_task(
-            self.confg['celery_task_prefix'] + '.' + name, *args, **kwargs)
 
 
 class GenericClient(object):

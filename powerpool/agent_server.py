@@ -4,12 +4,13 @@ import socket
 from time import time
 from gevent.queue import Queue
 from gevent.pool import Pool
+from gevent.server import StreamServer
 from gevent import sleep, with_timeout, spawn
 
-from .server import GenericServer, GenericClient
+from .server import GenericClient
 
 
-class AgentServer(GenericServer):
+class AgentServer(StreamServer):
     """ The agent server that pairs with a single port binding of a stratum
     server. Accepts connections from ppagent and reports more details
     statistics. """
@@ -27,18 +28,18 @@ class AgentServer(GenericServer):
         self.logger = server.register_logger('agent_server_{}'.
                                              format(self.config['port']))
         listener = (self.config['address'], self.config['port'])
-        super(GenericServer, self).__init__(listener, spawn=Pool())
+        super(StreamServer, self).__init__(listener, spawn=Pool())
         self.server = server
 
     def start(self, *args, **kwargs):
         self.logger.info("Agent server starting up on {address}:{port}"
                          .format(**self.config))
-        GenericServer.start(self, *args, **kwargs)
+        StreamServer.start(self, *args, **kwargs)
 
     def stop(self, *args, **kwargs):
         self.logger.info("Agent server {address}:{port} stopping"
                          .format(**self.config))
-        GenericServer.stop(self, *args, **kwargs)
+        StreamServer.stop(self, *args, **kwargs)
 
     def handle(self, sock, address):
         self.stratum_manager.agent_id_count += 1

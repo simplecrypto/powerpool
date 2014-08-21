@@ -55,11 +55,21 @@ class CeleryReporter(Reporter):
 
     # Remote methods to send information to other servers
     ########################
-    def add_one_minute(self, *args, **kwargs):
+    def add_one_minute(self, address, worker, stamp, typ, amount):
         self.server['queued'].incr()
-        self.queue.put(("add_one_minute", args, kwargs))
+        kwargs = {'user': address, 'worker': worker, 'minute': stamp,
+                  'valid_shares': 0}
+        if typ == StratumClient.VALID_SHARE:
+            kwargs['valid_shares'] = amount
+        if typ == StratumClient.DUP_SHARE:
+            kwargs['dup_shares'] = amount
+        if typ == StratumClient.LOW_DIFF:
+            kwargs['low_diff_shares'] = amount
+        if typ == StratumClient.STALE_SHARE:
+            kwargs['stale_shares'] = amount
+        self.queue.put(("add_one_minute", [], kwargs))
         self.logger.info("Calling celery task {} with {}"
-                         .format("add_one_minute", args))
+                         .format("add_one_minute", kwargs))
 
     def add_share(self, *args, **kwargs):
         self.server['queued'].incr()

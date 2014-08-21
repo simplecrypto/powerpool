@@ -8,20 +8,20 @@ import time
 import sys
 import subprocess
 
-from gevent import spawn, sleep
+from gevent import sleep
 from gevent.monkey import patch_all
 from gevent.event import Event
 patch_all()
 import logging
-from pprint import pformat
 
-from .stratum_server import StratumManager
 from .monitor import MonitorWSGI, MinuteStatManager, SecondStatManager
 from .utils import import_helper
+from .lib import Component
 import powerpool
 
 
 def main():
+    global manager
     parser = argparse.ArgumentParser(description='Run powerpool!')
     parser.add_argument('config', type=argparse.FileType('r'),
                         help='yaml configuration file to run with')
@@ -32,11 +32,11 @@ def main():
     raw_config.setdefault('powerpool', {})
 
     # check that config has a valid address
-    server = PowerPool(raw_config, **raw_config['powerpool'])
-    server.run()
+    manager = Manager(raw_config['powerpool'])
+    manager.start(raw_config)
 
 
-class PowerPool(object):
+class Manager(Component):
     """ This is a singelton class that manages starting/stopping of the server,
     along with all statistical counters rotation schedules. It takes the raw
     config and distributes it to each module, as well as loading dynamic modules.
@@ -45,14 +45,16 @@ class PowerPool(object):
     Each module can "register" a logger with the main object, which attaches
     it to configured handlers.
     """
-    def __init__(self, raw_config, procname="powerpool", term_timeout=3, loggers=None):
-        if not loggers:
-            loggers = [{'type': 'StreamHandler', 'level': 'DEBUG'}]
+    defaults = dict(procname="powerpool",
+                    term_timeout=3,
+                    loggers=[{'type': 'StreamHandler', 'level': 'DEBUG'}])
+    gl_methods = ['_tick_stats']
 
-        self.log_handlers = []
+    def _setup(self):
+        self._log_handlers = []
 
         # setup all our log handlers
-        for log_cfg in loggers:
+        for log_cfg in self.config['loggers']:
             if log_cfg['type'] == "StreamHandler":
                 kwargs = dict(stream=sys.stdout)
             else:
@@ -63,17 +65,9 @@ class PowerPool(object):
             fmt = log_cfg.get('format', '%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
             formatter = logging.Formatter(fmt)
             handler.setFormatter(formatter)
-            self.log_handlers.append((log_cfg.get('listen'), handler))
+            self._log_handlers.append((log_cfg.get('listen'), handler))
 
-        self.logger = self.register_logger('manager')
-
-        self.logger.info("=" * 80)
-        self.logger.info("PowerPool stratum server ({}) starting up...".format(procname))
-        self.logger.debug(pformat(raw_config))
-
-        setproctitle.setproctitle(procname)
-        self.term_timeout = term_timeout
-        self.raw_config = raw_config
+        setproctitle.setproctitle(self.config['procname'])
         self.version = powerpool.__version__
         self.version_info = powerpool.__version_info__
         self.sha = getattr(powerpool, '__sha__', "unknown")
@@ -82,42 +76,20 @@ class PowerPool(object):
             # try and fetch the git version information
             try:
                 output = subprocess.check_output("git show -s --format='%ci %h'",
-                                                shell=True).strip().rsplit(" ", 1)
+                                                 shell=True).strip().rsplit(" ", 1)
                 self.sha = output[1]
                 self.rev_date = output[0]
             # celery won't work with this, so set some default
             except Exception as e:
                 self.logger.info("Unable to fetch git hash info: {}".format(e))
 
-        # bookkeeping for things to request exit from at exit time
-        # A list of all the greenlets that are running
-        self.greenlets = []
-        # A list of all the StreamServers
-        self.servers = []
-
-        # Primary systems
-        self.stratum_manager = None
-        # The network monitor object
-        self.jobmanager = None
-        # The module that reports everything to the outside
-        self.reporter = None
-
-        self.stratum_servers = []
-        self.agent_servers = []
-        self.monitor_server = None
-
-        # Stats tracking for the whole server
-        #####
-        self.server_start = datetime.datetime.utcnow()
-
         # Setup all our stat managers
         self.min_stat_counters = []
         self.sec_stat_counters = []
-        self.stat_counters = {}
 
     def register_logger(self, name):
         logger = logging.getLogger(name)
-        for keys, handler in self.log_handlers:
+        for keys, handler in self._log_handlers:
             # If the keys are blank then we assume it wants all loggers
             # registered
             if not keys or name in keys:
@@ -127,63 +99,54 @@ class PowerPool(object):
 
         return logger
 
-    def register_stat_counters(self, min_counters, sec_counters=None):
+    def register_stat_counters(self, comp, min_counters, sec_counters=None):
         """ Creates and adds the stat counters to internal tracking dictionaries.
         These dictionaries are iterated to perform stat rotation, as well
         as accessed to perform stat logging """
+        counters = {}
         for key in min_counters:
-            if key in self.stat_counters:
-                raise ValueError("{} stat counter key has already been registered!"
-                                 .format(key))
             new = MinuteStatManager()
-            self.stat_counters[key] = new
+            new.owner = comp
+            counters[key] = new
             self.min_stat_counters.append(new)
 
         for key in sec_counters or []:
-            if key in self.stat_counters:
-                raise ValueError("{} stat counter key has already been registered!"
-                                 .format(key))
             new = SecondStatManager()
-            self.stat_counters[key] = new
+            new.owner = comp
+            counters[key] = new
             self.sec_stat_counters.append(new)
 
-    def __getitem__(self, key):
-        """ Allow convenient access to stat counters"""
-        return self.stat_counters[key]
+        return counters
 
-    def run(self):
+    def __getattr__(self, key):
+        """ Allow convenient access to stat counters"""
+        return self.components[key]
+
+    def start(self, raw_config):
         """ Start all components and register them so we can request their
         graceful termination at exit time. """
-        # Start the main chain network monitor and aux chain monitors
-        self.logger.info("Reporter engine starting up")
-        cls = import_helper(self.raw_config['reporter']['type'])
-        self.reporter = cls(self, **self.raw_config['reporter'])
-        self.reporter.start()
-        self.greenlets.append(self.reporter)
+        self.server_start = datetime.datetime.utcnow()
+        self.logger.info("=" * 80)
+        self.logger.info("PowerPool stratum server ({}) starting up..."
+                         .format(self.config['procname']))
+        super(Manager, self).start()
 
-        # main stratum server manager, not actually a greenelt but starts
-        # several servers and manages data structures
-        self.stratum_manager = StratumManager(self, **self.raw_config.get('stratum', {}))
-        self.servers.extend(self.stratum_manager.stratum_servers)
-        self.servers.extend(self.stratum_manager.agent_servers)
+        for key in raw_config.keys():
+            if key in ['reporter', 'stratum', 'jobmanager']:
+                # Start the main chain network monitor and aux chain monitors
+                cls = import_helper(self.config['types'][key])
+                comp = cls(raw_config[key])
+                self.components[key] = comp
 
-        # Network monitor is in charge of job generation...
-        self.logger.info("Network monitor starting up")
-        cls = import_helper(self.raw_config['jobmanager']['type'])
-        self.jobmanager = cls(self, **self.raw_config['jobmanager'])
-        self.jobmanager.start()
-        self.greenlets.append(self.jobmanager)
-
-        # a simple greenlet that rotates some of the servers stats
-        self.stat_rotater = spawn(self.tick_stats)
-        self.greenlets.append(self.stat_rotater)
+        for comp in self.components.itervalues():
+            comp.start()
 
         # the monitor server. a simple flask http server that lets you view
         # internal data structures to monitor server health
-        self.monitor_server = MonitorWSGI(self, **self.raw_config.get('monitor', {}))
-        if self.monitor_server:
-            self.monitor_server.start()
-            self.servers.append(self.monitor_server)
+        #self.monitor_server = MonitorWSGI(self, **raw_config.get('monitor', {}))
+        #if self.monitor_server:
+        #    self.monitor_server.start()
+        #    self.servers.append(self.monitor_server)
 
         # Register shutdown signals
         gevent.signal(signal.SIGINT, self.exit, "SIGINT")
@@ -192,19 +155,10 @@ class PowerPool(object):
         self._exit_signal = Event()
         # Wait for the exit signal to be called
         self._exit_signal.wait()
-
-        # stop all stream servers
-        for server in self.servers:
-            # timeout is actually the time we wait before killing the greenlet,
-            # so don't bother waiting, no cleanup is needed from our servers
-            spawn(server.stop, timeout=0)
-
-        # stop all greenlets
-        for gl in self.greenlets:
-            gl.kill(timeout=self.term_timeout, block=False)
+        self.stop()
 
         try:
-            if gevent.wait(timeout=self.term_timeout):
+            if gevent.wait(timeout=self.config['term_timeout']):
                 self.logger.info("All threads exited normally")
             else:
                 self.logger.info("Timeout reached, shutting down forcefully")
@@ -220,7 +174,7 @@ class PowerPool(object):
         """ Handle an exit request """
         self.logger.info("*" * 80)
         self.logger.info("Exiting requested via {}, allowing {} seconds for cleanup."
-                         .format(signal, self.term_timeout))
+                         .format(signal, self.config['term_timeout']))
         self._exit_signal.set()
 
     @property
@@ -235,7 +189,7 @@ class PowerPool(object):
                         rev_date=self.rev_date)
                     )
 
-    def tick_stats(self):
+    def _tick_stats(self):
         """ A greenlet that handles rotation of statistics """
         try:
             self.logger.info("Stat rotater starting up")

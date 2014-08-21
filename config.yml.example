@@ -136,6 +136,9 @@ jobmanager:
 # Reporter handles communication of new shares, block, etc for recording.
 reporter:
     type: powerpool.reporters.CeleryReporter
+    # Allows you to specify a worker name that all this powerpool instances
+    # shares will be logged as.
+    # pool_worker: ""
     # this defines the celery options that get passed to the daemon. this should
     # define how to connect to the queue server, etc
     #celery: 

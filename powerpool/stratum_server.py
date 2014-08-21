@@ -8,218 +8,16 @@ import time
 
 from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
-from cryptokit.base58 import get_bcaddress_version
-from hashlib import sha256
 from gevent import sleep, with_timeout, spawn
 from gevent.queue import Queue
 from gevent.pool import Pool
+from gevent.server import StreamServer
 from hashlib import sha1
 from os import urandom
 from pprint import pformat
 
-from .server import GenericServer, GenericClient
-from .utils import import_helper
-from .agent_server import AgentServer
-from .utils import recursive_update
-
-
-from ctypes import *
-class tcp_info(Structure):
-         _fields_  = [
-                ('tcpi_state',c_uint8),
-                ('tcpi_ca_state',c_uint8),
-                ('tcpi_retransmits',c_uint8),
-                ('tcpi_probes',c_uint8),
-                ('tcpi_backoff',c_uint8),
-                ('tcpi_options',c_uint8),
-                ('tcpi_snd_wscale',c_uint8,4),
-                  ('tcpi_rcv_wscale',c_uint8,4),
-                ('tcpi_rto',c_uint32),
-                ('tcpi_ato',c_uint32),
-                ('tcpi_snd_mss',c_uint32),
-                ('tcpi_rcv_mss',c_uint32),
-                ('tcpi_unacked',c_uint32),
-                ('tcpi_sacked',c_uint32),
-                ('tcpi_lost',c_uint32),
-                ('tcpi_retrans',c_uint32),
-                ('tcpi_fackets',c_uint32),
-                ('tcpi_last_data_sent',c_uint32),
-                ('tcpi_last_ack_sent',c_uint32),
-                ('tcpi_last_data_recv',c_uint32),
-                ('tcpi_last_ack_recv',c_uint32),
-                ('tcpi_pmtu',c_uint32),
-                ('tcpi_rcv_ssthresh',c_uint32),
-                ('tcpi_rtt',c_uint32),
-                ('tcpi_rttvar',c_uint32),
-                ('tcpi_snd_ssthresh',c_uint32),
-                ('tcpi_snd_cwnd',c_uint32),
-                ('tcpi_advmss',c_uint32),
-                ('tcpi_reordering',c_uint32),
-                ('tcpi_rcv_rtt',c_uint32),
-                ('tcpi_rcv_space',c_uint32),
-                ('tcpi_total_retrans',c_uint32)
-                  ]
-
-
-class StratumManager(object):
-    """ Manages the stratum servers and keeps lookup tables for addresses. """
-
-    one_min_stats = ['reject_low', 'reject_dup', 'reject_stale',
-                     'stratum_connects', 'stratum_disconnects',
-                     'agent_connects', 'agent_disconnects',
-                     'reject_low_shares', 'reject_dup_shares',
-                     'reject_stale_shares', 'not_subbed_err', 'not_authed_err',
-                     'unk_err']
-    one_sec_stats = ['valid', 'valid_shares']
-
-    def _set_config(self, **config):
-        self.config = dict(aliases={},
-                           vardiff=dict(spm_target=20,
-                                        interval=30,
-                                        tiers=[8, 16, 32, 64, 96, 128, 192, 256, 512]),
-                           push_job_interval=30,
-                           donate_address='',
-                           idle_worker_threshold=300,
-                           idle_worker_disconnect_threshold=3600,
-                           algorithms=dict(x11="drk_hash.getPoWHash",
-                                           scrypt="ltc_scrypt.getPoWHash",
-                                           scryptn="vtc_scrypt.getPoWHash",
-                                           blake256="blake_hash.getPoWHash",
-                                           sha256="cryptokit.sha256d"),
-                           agent=dict(enabled=False,
-                                      port_diff=1111,
-                                      timeout=120,
-                                      accepted_types=['temp', 'status', 'hashrate', 'thresholds']))
-        recursive_update(self.config, config)
-
-        if get_bcaddress_version(self.config['donate_address']) is None:
-            self.logger.error("No valid donation address configured! Exiting.")
-            exit()
-
-    def __init__(self, server, **config):
-        """ Handles starting all stratum servers and agent servers, along
-        with detecting algorithm module imports """
-        self.server = server
-        self.logger = server.register_logger('stratum_manager')
-        self._set_config(**config)
-
-        # A dictionary of all connected clients indexed by id
-        self.clients = {}
-        self.agent_clients = {}
-        # A dictionary of lists of connected clients indexed by address
-        self.address_lut = {}
-        # A dictionary of lists of connected clients indexed by address and
-        # worker tuple
-        self.address_worker_lut = {}
-        # each of our stream server objects for trickling down a shutdown
-        # signal
-        self.stratum_servers = []
-        self.agent_servers = []
-        # counters that allow quick display of these numbers. stratum only
-        self.authed_clients = 0
-        self.idle_clients = 0
-        # Unique client ID counters for stratum and agents
-        self.stratum_id_count = 0
-        self.agent_id_count = 0
-
-        self.server = server
-        self.server.register_stat_counters(self.one_min_stats, self.one_sec_stats)
-
-        self.algos = {}
-        # Detect and load all the hash functions we can find
-        for name, module_str in self.config['algorithms'].iteritems():
-            try:
-                self.algos[name] = import_helper(module_str)
-            except ImportError:
-                continue
-            self.logger.info("Enabling {} hashing algorithm from module {}"
-                             .format(name, module_str))
-
-        # create a single default stratum server if none are defined
-        if not self.config['interfaces']:
-            self.config['interfaces'].append({})
-
-        # Start up and bind our servers!
-        for cfg in self.config['interfaces']:
-            # Start a corresponding agent server
-            if self.config['agent']['enabled']:
-                serv = AgentServer(server, self, stratum_config=cfg, **self.config['agent'])
-                self.agent_servers.append(serv)
-                serv.start()
-
-            serv = StratumServer(server, self, **cfg)
-            self.stratum_servers.append(serv)
-            serv.start()
-
-    @property
-    def share_percs(self):
-        """ Pretty display of what percentage each reject rate is. Counts
-        from beginning of server connection """
-        acc_tot = self.server['valid'].total or 1
-        low_tot = self.server['reject_low'].total
-        dup_tot = self.server['reject_dup'].total
-        stale_tot = self.server['reject_stale'].total
-        return dict(
-            low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
-            stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
-            dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
-        )
-
-    @property
-    def status(self):
-        """ For display in the http monitor """
-        dct = dict(share_percs=self.share_percs,
-                   mhps=(self.server.jobmanager.config['hashes_per_share'] *
-                         self.server['valid'].minute / 1000000 / 60.0),
-                   agent_client_count=len(self.agent_clients),
-                   client_count=len(self.clients),
-                   address_count=len(self.address_lut),
-                   address_worker_count=len(self.address_lut),
-                   client_count_authed=self.authed_clients,
-                   client_count_active=len(self.clients) - self.idle_clients,
-                   client_count_idle=self.idle_clients)
-        dct.update({key: self.server[key].summary()
-                    for key in self.one_min_stats + self.one_sec_stats})
-        return dct
-
-    def set_conn(self, client):
-        """ Called when a new connection is recieved by stratum """
-        self.clients[client.id] = client
-
-    def set_user(self, client):
-        """ Add the client (or create) appropriate worker and address trackers
-        """
-        user_worker = (client.address, client.worker)
-        self.address_worker_lut.setdefault(user_worker, [])
-        self.address_worker_lut[user_worker].append(client)
-
-        self.address_lut.setdefault(user_worker[0], [])
-        self.address_lut[user_worker[0]].append(client)
-
-    def remove_client(self, client):
-        """ Manages removing the StratumClient from the luts """
-        del self.clients[client.id]
-        address, worker = client.address, client.worker
-
-        # it won't appear in the luts if these values were never set
-        if address is None and worker is None:
-            return
-
-        # wipe the client from the address tracker
-        if address in self.address_lut:
-            # remove from lut for address
-            self.address_lut[address].remove(client)
-            # if it's the last client in the object, delete the entry
-            if not len(self.address_lut[address]):
-                del self.address_lut[address]
-
-        # wipe the client from the address/worker tracker
-        key = (address, worker)
-        if key in self.address_worker_lut:
-            self.address_worker_lut[key].remove(client)
-            # if it's the last client in the object, delete the entry
-            if not len(self.address_worker_lut[key]):
-                del self.address_worker_lut[key]
+from .server import GenericClient
+from .lib import Component, manager
 
 
 class ArgumentParserError(Exception):
@@ -235,39 +33,36 @@ password_arg_parser = ThrowingArgumentParser()
 password_arg_parser.add_argument('-d', '--diff', type=int)
 
 
-class StratumServer(GenericServer):
+class StratumServer(Component, StreamServer):
     """ A single port binding of our stratum server. """
+    defaults = dict(address="127.0.0.1", start_difficulty=128, vardiff=True, port=3333)
 
-    def _set_config(self, **config):
-        self.config = dict(address="127.0.0.1", start_difficulty=128,
-                           vardiff=True, port=3333)
-        self.config.update(config)
-
-    def __init__(self, server, stratum_manager, **config):
-        self._set_config(**config)
+    def __init__(self, *args, **kwargs):
+        Component.__init__(self, *args, **kwargs)
         listener = (self.config['address'], self.config['port'])
-        super(GenericServer, self).__init__(listener, spawn=Pool())
-        self.server = server
-        self.stratum_manager = stratum_manager
-        self.logger = server.register_logger('stratum_server_{}'.
-                                             format(self.config['port']))
+        StreamServer.__init__(self, listener, spawn=Pool())
 
     def start(self, *args, **kwargs):
         self.logger.info("Stratum server starting up on {address}:{port}"
                          .format(**self.config))
-        GenericServer.start(self, *args, **kwargs)
+        StreamServer.start(self, *args, **kwargs)
+        Component.start(self)
 
     def stop(self, *args, **kwargs):
         self.logger.info("Stratum server {address}:{port} stopping"
                          .format(**self.config))
-        GenericServer.stop(self, *args, **kwargs)
+        StreamServer.stop(self, *args, **kwargs)
+        Component.stop(self)
 
     def handle(self, sock, address):
         """ A new connection appears on the server, so setup a new StratumClient
         object to manage it. """
-        self.server['stratum_connects'].incr()
-        self.stratum_manager.stratum_id_count += 1
-        StratumClient(sock, address, self.stratum_manager.stratum_id_count, self.server, self)
+        manager.stratum._incr('stratum_connects')
+        manager.stratum.stratum_id_count += 1
+        StratumClient(sock, address, manager, self)
+
+    def _name(self):
+        return "stratum_{}".format(self.config['port'])
 
 
 class StratumClient(GenericClient):
@@ -286,13 +81,13 @@ class StratumClient(GenericClient):
     DUP_SHARE_ERR = 22
 
     # constansts for share submission outcomes. returned by the share checker
-    BLOCK_FOUND = 0
     VALID_SHARE = 0
     DUP_SHARE = 1
-    LOW_DIFF = 2
+    LOW_DIFF_SHARE = 2
     STALE_SHARE = 3
+    share_type_strings = {0: "acc", 1: "dup", 2: "low", 3: "stale"}
 
-    def __init__(self, sock, address, id, server, stratum_server):
+    def __init__(self, sock, address, manager, stratum_server):
         self.logger = stratum_server.logger
         self.logger.info("Recieving stratum connection from addr {} on sock {}"
                          .format(address, sock))
@@ -305,13 +100,10 @@ class StratumClient(GenericClient):
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
         # global items, allows access to other modules in PowerPool
-        self.server = server
+        manager = manager
         self.config = stratum_server.config
-        self.manager_config = stratum_server.stratum_manager.config
-        self.algos = stratum_server.stratum_manager.algos
-        self.jobmanager = server.jobmanager
-        self.reporter = server.reporter
-        self.stratum_manager = server.stratum_manager
+        self.manager_config = manager.stratum.config
+        self.algo = manager.stratum.algos[stratum_server.config['algo']]
 
         # register client into the client dictionary
         self.sock = sock
@@ -324,7 +116,7 @@ class StratumClient(GenericClient):
         self.address = None
         self.worker = None
         # the worker id. this is also extranonce 1
-        self.id = hexlify(struct.pack('Q', id))
+        self.id = hexlify(struct.pack('Q', manager.stratum.stratum_id_count))
         # subscription id for difficulty on stratum
         self.subscr_difficulty = None
         # subscription id for work notif on stratum
@@ -334,7 +126,7 @@ class StratumClient(GenericClient):
         self.accepted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
-        self.job_counter = 0
+        self.job_counter = random.randint(0, 100000)
         # last time we sent graphing data to the server
         self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
         self.last_share_submit = time.time()
@@ -353,7 +145,7 @@ class StratumClient(GenericClient):
         self.fp = None
 
         try:
-            self.stratum_manager.set_conn(self)
+            manager.stratum.set_conn(self)
             self.peer_name = sock.getpeername()
             self.fp = sock.makefile()
             write_greenlet = spawn(self.write_loop)
@@ -364,10 +156,10 @@ class StratumClient(GenericClient):
             self.logger.error("Unhandled exception!", exc_info=True)
         finally:
             if self.authenticated:
-                self.stratum_manager.authed_clients -= 1
+                manager.stratum.authed_clients -= 1
 
             if self.idle:
-                self.stratum_manager.idle_clients -= 1
+                manager.stratum.idle_clients -= 1
 
             if write_greenlet:
                 write_greenlet.kill()
@@ -384,10 +176,13 @@ class StratumClient(GenericClient):
             except (socket.error, AttributeError):
                 pass
 
-            self.server['stratum_disconnects'].incr()
-            self.stratum_manager.remove_client(self)
+            self._incr('stratum_disconnects')
+            manager.stratum.remove_client(self)
 
             self.logger.info("Closing connection for client {}".format(self.id))
+
+    def _incr(self, *args):
+        manager.stratum._incr(*args)
 
     @property
     def summary(self):
@@ -402,13 +197,10 @@ class StratumClient(GenericClient):
     @property
     def details(self):
         """ Displayed on the single client view in the http status monitor """
-        fmt = "B"*7+"I"*21
-        info = tcp_info(*struct.unpack(fmt, self.sock.getsockopt(socket.SOL_TCP, socket.TCP_INFO, 92)))
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
                     id=self.id,
-                    info={k[0]: getattr(info, k[0]) for k in info._fields_},
                     last_share_submit=str(self.last_share_submit_delta),
                     idle=self.idle,
                     address=self.address,
@@ -445,9 +237,9 @@ class StratumClient(GenericClient):
         invalid."""
         job = None
         while True:
-            jobid = self.jobmanager.latest_job
+            jobid = manager.jobmanager.latest_job
             try:
-                job = self.jobmanager.jobs[jobid]
+                job = manager.jobmanager.jobs[jobid]
                 break
             except KeyError:
                 self.logger.warn("No jobs available for worker!")
@@ -487,7 +279,6 @@ class StratumClient(GenericClient):
     def submit_job(self, data):
         """ Handles recieving work submission and checking that it is valid
         , if it meets network diff, etc. Sends reply to stratum client. """
-        start = time.time()
         params = data['params']
         # [worker_name, job_id, extranonce2, ntime, nonce]
         # ["slush.miner1", "bf", "00000001", "504e86ed", "b2957c02"]
@@ -502,7 +293,7 @@ class StratumClient(GenericClient):
 
         if self.idle:
             self.idle = False
-            self.stratum_manager.idle_clients -= 1
+            manager.stratum.idle_clients -= 1
 
         self.last_share_submit = time.time()
 
@@ -512,19 +303,17 @@ class StratumClient(GenericClient):
             # since we can't identify the diff we just have to assume it's
             # current diff
             self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
-            self.server['reject_stale'].incr(self.difficulty)
-            self.server['reject_stale_shares'].incr()
-            return self.STALE_SHARE, self.difficulty, None
+            manager.reporter.log_share(self, self.difficulty, self.STALE_SHARE, params)
+            return
 
         # lookup the job in the global job dictionary. If it's gone from here
         # then a new block was announced which wiped it
         try:
-            job = self.jobmanager.jobs[jobid]
+            job = manager.jobmanager.jobs[jobid]
         except KeyError:
             self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
-            self.server['reject_stale'].incr(difficulty)
-            self.server['reject_stale_shares'].incr()
-            return self.STALE_SHARE, difficulty, job
+            manager.reporter.log_share(self, difficulty, self.STALE_SHARE, params)
+            return
 
         # assemble a complete block header bytestring
         header = job.block_header(
@@ -532,9 +321,6 @@ class StratumClient(GenericClient):
             extra1=self.id,
             extra2=params[2],
             ntime=params[3])
-        # Grab the raw coinbase out of the job object before gevent can preempt
-        # to another thread and change the value. Very important!
-        coinbase_raw = job.coinbase.raw
 
         # Check a submitted share against previous shares to eliminate
         # duplicates
@@ -543,63 +329,25 @@ class StratumClient(GenericClient):
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE_ERR, id_val=self.msg_id)
-            self.server['reject_dup'].incr(difficulty)
-            self.server['reject_dup_shares'].incr()
-            return self.DUP_SHARE, difficulty, job
+            manager.reporter.log_share(self, difficulty, self.DUP_SHARE, params, job=job)
+            return
 
         job_target = target_from_diff(difficulty, job.diff1)
-        hash_int = uint256_from_str(self.algos[job.algo](header))
+        hash_int = uint256_from_str(self.algo(header))
         if hash_int >= job_target:
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF_ERR, id_val=self.msg_id)
-            self.server['reject_low'].incr(difficulty)
-            self.server['reject_low_shares'].incr()
-            return self.LOW_DIFF, difficulty, job
+            manager.reporter.log_share(self, difficulty, self.LOW_DIFF_SHARE, params, job=job)
+            return
 
         # we want to send an ack ASAP, so do it here
         self.send_success(id_val=self.msg_id)
-        self.logger.debug("Valid share accepted from worker {}.{}!"
-                          .format(self.address, self.worker))
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
-        self.server['valid'].incr(difficulty)
-        self.server['valid_shares'].incr()
-
-        # Some coins use POW function to do blockhash, while others use SHA256.
-        # Allow toggling
-        if job.pow_block_hash:
-            header_hash = self.algos[job.algo](header)[::-1]
-        else:
-            header_hash = sha256(sha256(header).digest()).digest()[::-1]
-        hash_hex = hexlify(header_hash)
-
-        # valid network hash?
-        if hash_int <= job.bits_target:
-            spawn(self.jobmanager.found_block,
-                  coinbase_raw,
-                  self.address,
-                  self.worker,
-                  hash_hex,
-                  header,
-                  job.job_id,
-                  start)
-            outcome = self.BLOCK_FOUND
-        else:
-            outcome = self.VALID_SHARE
-
-        # check each aux chain for validity
-        for chain_id, data in job.merged_data.iteritems():
-            if hash_int <= data['target']:
-                spawn(self.jobmanager.found_merged_block,
-                      self.address,
-                      self.worker,
-                      header,
-                      job.job_id,
-                      coinbase_raw,
-                      data['type'])
-
-        return outcome, difficulty, job
+        self.accepted_shares += difficulty
+        manager.reporter.log_share(self, difficulty, self.VALID_SHARE, params, job=job,
+                                   header_hash=hash_int, header=header)
 
     def authenticate(self, data):
         try:
@@ -624,9 +372,9 @@ class StratumClient(GenericClient):
 
         # unpack into state dictionary
         self.address, self.worker = user_worker
-        self.stratum_manager.set_user(self)
+        manager.stratum.set_user(self)
         self.authenticated = True
-        self.stratum_manager.authed_clients += 1
+        manager.stratum.authed_clients += 1
 
         # notify of success authing and send him current diff and latest job
         self.send_success(self.msg_id)
@@ -637,12 +385,7 @@ class StratumClient(GenericClient):
         # ideal difficulty is the n1 shares they solved divided by target
         # shares per minute
         spm_tar = self.manager_config['vardiff']['spm_target']
-        tracker = self.reporter.addresses.get(self.address)
-        if not tracker:
-            self.logger.debug("VARDIFF: No address tracker, must be no valid shares for this user")
-            ideal_diff = 0.0
-        else:
-            ideal_diff = tracker.spm / spm_tar
+        ideal_diff = manager.reporter.spm(self.address) / spm_tar
         self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
                           .format(self.id, ideal_diff))
         # find the closest tier for them
@@ -670,7 +413,7 @@ class StratumClient(GenericClient):
                  ("mining.notify",
                   self.subscr_notify)),
                 self.id,
-                self.jobmanager.config['extranonce_size']),
+                manager.jobmanager.config['extranonce_size']),
                'error': None,
                'id': self.msg_id}
         self.subscribed = True
@@ -697,7 +440,7 @@ class StratumClient(GenericClient):
             if line == 'timeout':
                 if not self.idle and (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
                     self.idle = True
-                    self.stratum_manager.idle_clients += 1
+                    manager.stratum.idle_clients += 1
 
                 if (time.time() - self.last_share_submit) > self.manager_config['idle_worker_disconnect_threshold']:
                     self.logger.info("Disconnecting worker {}.{} at ip {} for inactivity"
@@ -749,11 +492,11 @@ class StratumClient(GenericClient):
                     self.subscribe(data)
                 elif meth == "mining.authorize":
                     if self.subscribed is False:
-                        self.server['not_subbed_err'].incr()
+                        self._incr('not_subbed_err')
                         self.send_error(25, id_val=self.msg_id)
                         continue
                     if self.authenticated is True:
-                        self.server['not_authed_err'].incr()
+                        self._incr('not_authed_err')
                         self.send_error(24, id_val=self.msg_id)
                         continue
 
@@ -762,16 +505,11 @@ class StratumClient(GenericClient):
                     self.send_success(id_val=self.msg_id)
                 elif meth == "mining.submit":
                     if self.authenticated is False:
-                        self.server['not_authed_err'].incr()
+                        self._incr('not_authed_err')
                         self.send_error(24, id_val=self.msg_id)
                         continue
 
-                    outcome, diff, job = self.submit_job(data)
-                    if self.VALID_SHARE == outcome or self.BLOCK_FOUND == outcome:
-                        self.accepted_shares += diff
-
-                    # log the share results for aggregation and transmission
-                    self.reporter.log_share(self.address, self.worker, diff, outcome, job)
+                    self.submit_job(data)
 
                     # don't recalc their diff more often than interval
                     if (self.config['vardiff'] and
@@ -780,10 +518,10 @@ class StratumClient(GenericClient):
                 else:
                     self.logger.warn("Unkown action {} for command {}"
                                      .format(data['method'][:20], self.peer_name[0]))
-                    self.server['unk_err'].incr()
+                    self._incr('unk_err')
                     self.send_error(id_val=self.msg_id)
             else:
                 self.logger.warn("Empty action in JSON {}"
                                  .format(self.peer_name[0]))
-                self.server['unk_err'].incr()
+                self._incr('unk_err')
                 self.send_error(id_val=self.msg_id)

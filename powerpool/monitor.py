@@ -71,10 +71,10 @@ class MonitorWSGI(WSGIServer):
         app.real_logger = logger
 
         # setup localproxy refs
-        app.server = server
+        app.manager = server
         app.jobmanager = server.jobmanager
         app.reporter = server.reporter
-        app.stratum_manager = server.stratum_manager
+        app.stratum_manager = server.stratum
         WSGIServer.__init__(self, (address, port), app, log=Logger())
 
     def stop(self, *args, **kwargs):
