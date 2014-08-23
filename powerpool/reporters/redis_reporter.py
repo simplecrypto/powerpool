@@ -10,7 +10,8 @@ class RedisReporter(StatReporter):
     one_sec_stats = ['queued']
     gl_methods = ['_queue_proc']
 
-    def _setup(self):
+    def __init__(self, config):
+        self._configure(config)
         super(RedisReporter, self)._setup()
         # Import reporter type specific modules here as to not require them
         # for using powerpool with other reporters
@@ -57,7 +58,7 @@ class RedisReporter(StatReporter):
                                        fees=fees,
                                        hex_bits=hex_bits,
                                        hash=hash,
-                                       algo=self.config['algo']))
+                                       algo=algo))
             pipe.rename(block_key, "unproc_block_{}".format(hash))
             pipe.hset(block_key, "start_time", str(time.time()))
             pipe.execute()
@@ -110,4 +111,4 @@ class RedisReporter(StatReporter):
                                                      merged=False)))
 
     def add_block(self, *args, **kwargs):
-        self.queue.put(("add_block", args, kwargs))
+        self.queue.put(("_queue_add_block", args, kwargs))

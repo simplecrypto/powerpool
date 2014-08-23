@@ -1,11 +1,11 @@
 import time
+import gevent
 
 from gevent import spawn, GreenletExit
 from hashlib import sha256
 from binascii import hexlify
 
 from ..lib import Component, loop
-from ..main import manager
 from ..utils import time_format
 from ..stratum_server import StratumClient
 
@@ -30,6 +30,9 @@ class Reporter(Component):
                   header=None):
         """ Logs a share to external sources for payout calculation and
         statistics """
+        self.logger.debug("Running log share with args {} kwargs {}"
+                          .format((client, diff, typ, params), dict(job=job,
+                                  header_hash=header_hash, header=header)))
 
         # Log the share to our stat counters
         key = ""
@@ -50,32 +53,38 @@ class Reporter(Component):
             # Some coins use POW function to do blockhash, while others use SHA256.
             # Allow toggling
             if job.pow_block_hash:
-                header_hash = client.algos[job.algo](header)[::-1]
+                header_hash_raw = client.algo(header)[::-1]
             else:
-                header_hash = sha256(sha256(header).digest()).digest()[::-1]
-            hash_hex = hexlify(header_hash)
+                header_hash_raw = sha256(sha256(header).digest()).digest()[::-1]
+            hash_hex = hexlify(header_hash_raw)
 
+            submission_threads = []
             # valid network hash?
             if header_hash <= job.bits_target:
-                spawn(client.jobmanager.found_block,
-                      coinbase_raw,
-                      client.address,
-                      client.worker,
-                      hash_hex,
-                      header,
-                      job.job_id,
-                      start)
+                submission_threads.append(spawn(
+                    job.found_block,
+                    coinbase_raw,
+                    client.address,
+                    client.worker,
+                    hash_hex,
+                    header,
+                    job,
+                    start))
 
             # check each aux chain for validity
             for chain_id, data in job.merged_data.iteritems():
                 if header_hash <= data['target']:
-                    spawn(client.jobmanager.found_merged_block,
-                          client.address,
-                          client.worker,
-                          header,
-                          job.job_id,
-                          coinbase_raw,
-                          data['type'])
+                    submission_threads.append(spawn(
+                        data['found_block'],
+                        client.address,
+                        client.worker,
+                        header,
+                        coinbase_raw,
+                        job,
+                        start))
+
+            for gl in gevent.iwait(submission_threads):
+                spawn(self.add_block, **gl.value)
 
 
 class StatReporter(Reporter):
@@ -83,7 +92,7 @@ class StatReporter(Reporter):
     them to allow separation of statistics reporting and payout related
     logging. """
 
-    defaults = dict(report_pool_stats=True, pool_worker='')
+    defaults = dict(report_pool_stats=True, pool_worker='', chain=1)
     gl_methods = ['_report_one_min']
 
     def _setup(self):
@@ -171,26 +180,3 @@ class StatReporter(Reporter):
                 mins += 1
 
         return total / (mins or 1)  # or 1 prevents divison by zero error
-
-
-class AddressTracker(object):
-    """ Tracks the last 10 minutes of shares submitted by a address allowing
-    our vardiff to operate by address instead of by connection. """
-    def __init__(self, reporter, address):
-        self.reporter = reporter
-        self.minutes = {}
-        self.address = address
-        self.last_log = None
-
-    def count_share(self, amount):
-        curr = time.time()
-        t = (int(curr) // 60) * 60
-        self.minutes.setdefault(t, 0)
-        self.minutes[t] += amount
-        self.last_log = curr
-
-    @property
-    def status(self):
-        spm = self.spm
-        return dict(megahashrate=manager.jobmanager.config['hashes_per_share'] * spm / 60.0 / 1000000,
-                    spm=spm)

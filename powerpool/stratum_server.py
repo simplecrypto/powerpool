@@ -12,12 +12,13 @@ from gevent import sleep, with_timeout, spawn
 from gevent.queue import Queue
 from gevent.pool import Pool
 from gevent.server import StreamServer
-from hashlib import sha1
-from os import urandom
 from pprint import pformat
 
+from .agent_server import AgentServer
+from .exceptions import LoopExit
 from .server import GenericClient
-from .lib import Component, manager
+from .utils import time_format
+from .lib import Component, loop
 
 
 class ArgumentParserError(Exception):
@@ -35,14 +36,61 @@ password_arg_parser.add_argument('-d', '--diff', type=int)
 
 class StratumServer(Component, StreamServer):
     """ A single port binding of our stratum server. """
-    defaults = dict(address="127.0.0.1", start_difficulty=128, vardiff=True, port=3333)
 
-    def __init__(self, *args, **kwargs):
-        Component.__init__(self, *args, **kwargs)
+    one_min_stats = ['stratum_connects', 'stratum_disconnects',
+                     'agent_connects', 'agent_disconnects']
+    defaults = dict(address="0.0.0.0",
+                    port=3333,
+                    start_difficulty=128,
+                    idle_worker_threshold=300,
+                    aliases={},
+                    vardiff=dict(enabled=False,
+                                 spm_target=20,
+                                 interval=30,
+                                 tiers=[8, 16, 32, 64, 96, 128, 192, 256, 512]),
+                    push_job_interval=30,
+                    idle_worker_disconnect_threshold=3600,
+                    agent=dict(enabled=False,
+                               port_diff=1111,
+                               timeout=120,
+                               accepted_types=['temp', 'status', 'hashrate',
+                                               'thresholds']))
+    # Don't spawn a greenlet to handle creation of clients, we start one for
+    # reading and one for writing in their own class...
+    _spawn = None
+
+    def __init__(self, config):
+        self._configure(config)
         listener = (self.config['address'], self.config['port'])
+
+        # Start a corresponding agent server
+        if self.config['agent']['enabled']:
+            serv = AgentServer()
+            self.components[serv.name] = serv
+
         StreamServer.__init__(self, listener, spawn=Pool())
 
+        # A dictionary of all connected clients indexed by id
+        self.clients = {}
+        self.agent_clients = {}
+        # A dictionary of lists of connected clients indexed by address
+        self.address_lut = {}
+        # A dictionary of lists of connected clients indexed by address and
+        # worker tuple
+        self.address_worker_lut = {}
+        # counters that allow quick display of these numbers. stratum only
+        self.authed_clients = 0
+        self.idle_clients = 0
+        # Unique client ID counters for stratum and agents
+        self.stratum_id_count = 0
+        self.agent_id_count = 0
+
     def start(self, *args, **kwargs):
+        self.algo_func = self.manager.algos[self.config['algo']]
+        self.reporter = self.manager.component_types['Reporter'][0]
+        self.jobmanager = self.manager.component_types['Jobmanager'][0]
+        self.jobmanager.new_job.rawlink(self.new_job)
+
         self.logger.info("Stratum server starting up on {address}:{port}"
                          .format(**self.config))
         StreamServer.start(self, *args, **kwargs)
@@ -51,15 +99,115 @@ class StratumServer(Component, StreamServer):
     def stop(self, *args, **kwargs):
         self.logger.info("Stratum server {address}:{port} stopping"
                          .format(**self.config))
-        StreamServer.stop(self, *args, **kwargs)
+        StreamServer.close(self)
+        for client in self.clients.values():
+            client.stop()
         Component.stop(self)
 
     def handle(self, sock, address):
         """ A new connection appears on the server, so setup a new StratumClient
         object to manage it. """
-        manager.stratum._incr('stratum_connects')
-        manager.stratum.stratum_id_count += 1
-        StratumClient(sock, address, manager, self)
+        self.logger.info("Recieving stratum connection from addr {} on sock {}"
+                         .format(address, sock))
+        self.stratum_id_count += 1
+        client = StratumClient(
+            sock,
+            address,
+            config=self.config,
+            logger=self.logger,
+            jobmanager=self.jobmanager,
+            manager=self.manager,
+            algo_func=self.algo_func,
+            server=self,
+            reporter=self.reporter)
+        self._incr('stratum_connects')
+        self.clients[client.id] = client
+        client.start()
+
+    def new_job(self, event):
+        jm = self.jobmanager
+        job = jm.jobs[jm.latest_job]
+
+        t = time.time()
+        job.stratum_string()
+        flush = job.flush
+        for client in self.clients.itervalues():
+            if client.authenticated:
+                client._push(job, flush=flush, block=False)
+        self.logger.info("New job enqueued for transmission to {} users in {}"
+                         .format(len(self.clients), time_format(time.time() - t)))
+
+    @property
+    def share_percs(self):
+        """ Pretty display of what percentage each reject rate is. Counts
+        from beginning of server connection """
+        acc_tot = self.manager['valid'].total or 1
+        low_tot = self.manager['reject_low'].total
+        dup_tot = self.manager['reject_dup'].total
+        stale_tot = self.manager['reject_stale'].total
+        return dict(
+            low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
+            stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
+            dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
+        )
+
+    @property
+    def status(self):
+        """ For display in the http monitor """
+        dct = dict(share_percs=self.share_percs,
+                   mhps=(self.manager.jobmanager.config['hashes_per_share'] *
+                         self.manager['valid'].minute / 1000000 / 60.0),
+                   agent_client_count=len(self.agent_clients),
+                   client_count=len(self.clients),
+                   address_count=len(self.address_lut),
+                   address_worker_count=len(self.address_lut),
+                   client_count_authed=self.authed_clients,
+                   client_count_active=len(self.clients) - self.idle_clients,
+                   client_count_idle=self.idle_clients)
+        dct.update({key: val.summary() for key, val in self.counters.iteritems()})
+        return dct
+
+    def set_user(self, client):
+        """ Add the client (or create) appropriate worker and address trackers
+        """
+        user_worker = (client.address, client.worker)
+        self.address_worker_lut.setdefault(user_worker, [])
+        self.address_worker_lut[user_worker].append(client)
+        self.authed_clients += 1
+
+        self.address_lut.setdefault(user_worker[0], [])
+        self.address_lut[user_worker[0]].append(client)
+
+    def remove_client(self, client):
+        """ Manages removing the StratumClient from the luts """
+        del self.clients[client.id]
+        address, worker = client.address, client.worker
+        self._incr('stratum_disconnects')
+
+        if client.authenticated:
+            self.authed_clients -= 1
+        if client.idle:
+            self.idle_clients -= 1
+
+        # it won't appear in the luts if these values were never set
+        if address is None and worker is None:
+            return
+
+        # wipe the client from the address tracker
+        if address in self.address_lut:
+            # remove from lut for address
+            self.address_lut[address].remove(client)
+            # if it's the last client in the object, delete the entry
+            if not len(self.address_lut[address]):
+                del self.address_lut[address]
+
+        # wipe the client from the address/worker tracker
+        key = (address, worker)
+        if key in self.address_worker_lut:
+            self.address_worker_lut[key].remove(client)
+            # if it's the last client in the object, delete the entry
+            if not len(self.address_worker_lut[key]):
+                del self.address_worker_lut[key]
 
     def _name(self):
         return "stratum_{}".format(self.config['port'])
@@ -75,6 +223,9 @@ class StratumClient(GenericClient):
               23: 'Low difficulty share',
               24: 'Unauthorized worker',
               25: 'Not subscribed'}
+    error_counter = {20: 'unk_err',
+                     24: 'not_authed_err',
+                     25: 'not_subbed_err'}
     # enhance readability by reducing magic number use...
     STALE_SHARE_ERR = 21
     LOW_DIFF_ERR = 23
@@ -87,10 +238,17 @@ class StratumClient(GenericClient):
     STALE_SHARE = 3
     share_type_strings = {0: "acc", 1: "dup", 2: "low", 3: "stale"}
 
-    def __init__(self, sock, address, manager, stratum_server):
-        self.logger = stratum_server.logger
-        self.logger.info("Recieving stratum connection from addr {} on sock {}"
-                         .format(address, sock))
+    def __init__(self, sock, address, logger, manager, jobmanager, server,
+                 reporter, algo_func, config):
+        self.config = config
+        self.jobmanager = jobmanager
+        self.manager = manager
+        self.algo_func = algo_func
+        self.server = server
+        self.reporter = reporter
+        self.logger = logger
+        self.sock = sock
+        self.address = address
 
         # Seconds before sending keepalive probes
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
@@ -99,113 +257,80 @@ class StratumClient(GenericClient):
         # Failed keepalive probles before declaring other end dead
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
-        # global items, allows access to other modules in PowerPool
-        manager = manager
-        self.config = stratum_server.config
-        self.manager_config = manager.stratum.config
-        self.algo = manager.stratum.algos[stratum_server.config['algo']]
-
-        # register client into the client dictionary
-        self.sock = sock
-
-        # flags for current connection state
-        self._disconnected = False
         self.authenticated = False
         self.subscribed = False
+        # flags for current connection state
         self.idle = False
         self.address = None
         self.worker = None
         # the worker id. this is also extranonce 1
-        self.id = hexlify(struct.pack('Q', manager.stratum.stratum_id_count))
-        # subscription id for difficulty on stratum
-        self.subscr_difficulty = None
-        # subscription id for work notif on stratum
-        self.subscr_notify = None
+        self.id = hexlify(struct.pack('Q', self.server.stratum_id_count))
 
+        t = time.time()
         # running total for vardiff
         self.accepted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
         self.job_counter = random.randint(0, 100000)
-        # last time we sent graphing data to the server
-        self.time_seed = random.uniform(0, 10)  # a random value to jitter timings by
-        self.last_share_submit = time.time()
-        self.last_job_push = time.time()
+        # Allows us to avoid a bunch of clients getting scheduled at the same
+        # time by offsetting most timing values by this
+        self.time_seed = random.uniform(0, 10)
+        # Used to determine if they're idle
+        self.last_share_submit = t
+        # Used to determine if we should send another job on read loop timeout
+        self.last_job_push = t
+        # Avoids repeat pushing jobs that the client already knows about
         self.last_job_id = None
-        self.last_diff_adj = time.time() - self.time_seed
+        # Last time vardiff happened
+        self.last_diff_adj = t - self.time_seed
+        # Current difficulty setting
         self.difficulty = self.config['start_difficulty']
         # the next diff to be used by push job
         self.next_diff = self.config['start_difficulty']
-        self.connection_time = int(time.time())
+        # What time the user connected...
+        self.connection_time = int(t)
+        # What time the user connected...
         self.msg_id = None
 
         # where we put all the messages that need to go out
         self.write_queue = Queue()
-        write_greenlet = None
         self.fp = None
+        self._stopped = False
 
+    def start(self):
+        self.peer_name = self.sock.getpeername()
+        self.fp = self.sock.makefile()
+
+        self._rloop = spawn(self.read)
+        self._wloop = spawn(self.write)
+
+    def stop(self, exit_exc=None, caller=None):
+        if self._stopped:
+            return
+
+        self._stopped = True
+        self._rloop.kill()
+        self._wloop.kill()
+
+        # handle clean disconnection from client
         try:
-            manager.stratum.set_conn(self)
-            self.peer_name = sock.getpeername()
-            self.fp = sock.makefile()
-            write_greenlet = spawn(self.write_loop)
-            self.read_loop()
+            self.sock.shutdown(socket.SHUT_RDWR)
         except socket.error:
-            self.logger.debug("Socket error closing connection", exc_info=True)
-        except Exception:
-            self.logger.error("Unhandled exception!", exc_info=True)
-        finally:
-            if self.authenticated:
-                manager.stratum.authed_clients -= 1
+            pass
+        try:
+            self.fp.close()
+        except (socket.error, AttributeError):
+            pass
+        try:
+            self.sock.close()
+        except (socket.error, AttributeError):
+            pass
 
-            if self.idle:
-                manager.stratum.idle_clients -= 1
-
-            if write_greenlet:
-                write_greenlet.kill()
-
-            # handle clean disconnection from client
-            try:
-                self.sock.shutdown(socket.SHUT_RDWR)
-            except socket.error:
-                pass
-            try:
-                if self.fp:
-                    self.fp.close()
-                self.sock.close()
-            except (socket.error, AttributeError):
-                pass
-
-            self._incr('stratum_disconnects')
-            manager.stratum.remove_client(self)
-
-            self.logger.info("Closing connection for client {}".format(self.id))
+        self.server.remove_client(self)
+        self.logger.info("Closing connection for client {}".format(self.id))
 
     def _incr(self, *args):
-        manager.stratum._incr(*args)
-
-    @property
-    def summary(self):
-        """ Displayed on the all client view in the http status monitor """
-        return dict(worker=self.worker,
-                    idle=self.idle)
-
-    @property
-    def last_share_submit_delta(self):
-        return datetime.datetime.utcnow() - datetime.datetime.utcfromtimestamp(self.last_share_submit)
-
-    @property
-    def details(self):
-        """ Displayed on the single client view in the http status monitor """
-        return dict(alltime_accepted_shares=self.accepted_shares,
-                    difficulty=self.difficulty,
-                    worker=self.worker,
-                    id=self.id,
-                    last_share_submit=str(self.last_share_submit_delta),
-                    idle=self.idle,
-                    address=self.address,
-                    ip_address=self.peer_name[0],
-                    connection_time=str(self.connection_duration))
+        self.server._incr(*args)
 
     def send_error(self, num=20, id_val=1):
         """ Utility for transmitting an error to the client """
@@ -237,9 +362,9 @@ class StratumClient(GenericClient):
         invalid."""
         job = None
         while True:
-            jobid = manager.jobmanager.latest_job
+            jobid = self.jobmanager.latest_job
             try:
-                job = manager.jobmanager.jobs[jobid]
+                job = self.jobmanager.jobs[jobid]
                 break
             except KeyError:
                 self.logger.warn("No jobs available for worker!")
@@ -264,7 +389,7 @@ class StratumClient(GenericClient):
 
         self._push(job)
 
-    def _push(self, job, flush=False):
+    def _push(self, job, flush=False, block=True):
         """ Abbreviated push update that will occur when pushing new block
         notifications. Mico-optimized to try and cut stale share rates as much
         as possible. """
@@ -274,7 +399,7 @@ class StratumClient(GenericClient):
         self.job_counter += 1
         job_id = str(self.job_counter)
         self.job_mapper[job_id] = (self.difficulty, job.job_id)
-        self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"))
+        self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"), block=block)
 
     def submit_job(self, data):
         """ Handles recieving work submission and checking that it is valid
@@ -293,7 +418,7 @@ class StratumClient(GenericClient):
 
         if self.idle:
             self.idle = False
-            manager.stratum.idle_clients -= 1
+            self.server.idle_clients -= 1
 
         self.last_share_submit = time.time()
 
@@ -302,17 +427,23 @@ class StratumClient(GenericClient):
         except KeyError:
             # since we can't identify the diff we just have to assume it's
             # current diff
-            self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
-            manager.reporter.log_share(self, self.difficulty, self.STALE_SHARE, params)
+            self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
+            self.reporter.log_share(client=self,
+                                    diff=self.difficulty,
+                                    typ=self.STALE_SHARE,
+                                    params=params)
             return
 
         # lookup the job in the global job dictionary. If it's gone from here
         # then a new block was announced which wiped it
         try:
-            job = manager.jobmanager.jobs[jobid]
+            job = self.jobmanager.jobs[jobid]
         except KeyError:
-            self.send_error(self.STALE_SHARE_ERR, id_val=self.msg_id)
-            manager.reporter.log_share(self, difficulty, self.STALE_SHARE, params)
+            self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
+            self.reporter.log_share(client=self,
+                                    diff=difficulty,
+                                    typ=self.STALE_SHARE,
+                                    params=params)
             return
 
         # assemble a complete block header bytestring
@@ -328,68 +459,49 @@ class StratumClient(GenericClient):
         if share in job.acc_shares:
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
-            self.send_error(self.DUP_SHARE_ERR, id_val=self.msg_id)
-            manager.reporter.log_share(self, difficulty, self.DUP_SHARE, params, job=job)
+            self.send_error(self.DUP_SHARE_ERR, id_val=data['id'])
+            self.reporter.log_share(client=self,
+                                    diff=difficulty,
+                                    typ=self.DUP_SHARE,
+                                    params=params,
+                                    job=job)
             return
 
         job_target = target_from_diff(difficulty, job.diff1)
-        hash_int = uint256_from_str(self.algo(header))
+        hash_int = uint256_from_str(self.algo_func(header))
         if hash_int >= job_target:
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
-            self.send_error(self.LOW_DIFF_ERR, id_val=self.msg_id)
-            manager.reporter.log_share(self, difficulty, self.LOW_DIFF_SHARE, params, job=job)
+            self.send_error(self.LOW_DIFF_ERR, id_val=data['id'])
+            self.reporter.log_share(client=self,
+                                    diff=difficulty,
+                                    typ=self.LOW_DIFF_SHARE,
+                                    params=params,
+                                    job=job)
             return
 
         # we want to send an ack ASAP, so do it here
-        self.send_success(id_val=self.msg_id)
+        self.send_success(id_val=data['id'])
         # Add the share to the accepted set to check for dups
         job.acc_shares.add(share)
         self.accepted_shares += difficulty
-        manager.reporter.log_share(self, difficulty, self.VALID_SHARE, params, job=job,
-                                   header_hash=hash_int, header=header)
-
-    def authenticate(self, data):
-        try:
-            password = data.get('params', [None])[1]
-        except IndexError:
-            password = ""
-
-        # allow the user to use the password field as an argument field
-        try:
-            args = password_arg_parser.parse_args(password.split())
-        except ArgumentParserError:
-            pass
-        else:
-            if args.diff and args.diff in self.manager_config['vardiff']['tiers']:
-                self.difficulty = args.diff
-                self.next_diff = args.diff
-
-        username = data.get('params', [None])[0]
-        self.logger.info("Authentication request from {} for username {}"
-                         .format(self.peer_name[0], username))
-        user_worker = self.convert_username(username)
-
-        # unpack into state dictionary
-        self.address, self.worker = user_worker
-        manager.stratum.set_user(self)
-        self.authenticated = True
-        manager.stratum.authed_clients += 1
-
-        # notify of success authing and send him current diff and latest job
-        self.send_success(self.msg_id)
-        self.push_difficulty()
-        self.push_job()
+        self.reporter.log_share(client=self,
+                                diff=difficulty,
+                                typ=self.VALID_SHARE,
+                                params=params,
+                                job=job,
+                                header_hash=hash_int,
+                                header=header)
 
     def recalc_vardiff(self):
         # ideal difficulty is the n1 shares they solved divided by target
         # shares per minute
-        spm_tar = self.manager_config['vardiff']['spm_target']
-        ideal_diff = manager.reporter.spm(self.address) / spm_tar
+        spm_tar = self.config['vardiff']['spm_target']
+        ideal_diff = self.reporter.spm(self.address) / spm_tar
         self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
                           .format(self.id, ideal_diff))
         # find the closest tier for them
-        new_diff = min(self.manager_config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+        new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
         if new_diff != self.difficulty:
             self.logger.info(
@@ -403,125 +515,182 @@ class StratumClient(GenericClient):
         self.last_diff_adj = time.time()
         self.push_job(timeout=True)
 
-    def subscribe(self, data):
-        """ Performs stratum subscription logic """
-        self.subscr_notify = sha1(urandom(4)).hexdigest()
-        self.subscr_difficulty = sha1(urandom(4)).hexdigest()
-        ret = {'result':
-               ((("mining.set_difficulty",
-                  self.subscr_difficulty),
-                 ("mining.notify",
-                  self.subscr_notify)),
-                self.id,
-                manager.jobmanager.config['extranonce_size']),
-               'error': None,
-               'id': self.msg_id}
-        self.subscribed = True
-        self.logger.debug("Sending subscribe response: {}".format(pformat(ret)))
-        self.write_queue.put(json.dumps(ret) + "\n")
+    @loop(fin='stop', exit_exceptions=(socket.error, ))
+    def read(self):
+        # designed to time out approximately "push_job_interval" after the user
+        # last recieved a job. Some miners will consider the mining server dead
+        # if they don't recieve something at least once a minute, regardless of
+        # whether a new job is _needed_. This aims to send a job _only_ as
+        # often as needed
+        line = with_timeout(time.time() - self.last_job_push + self.config['push_job_interval'] - self.time_seed,
+                            self.fp.readline,
+                            timeout_value='timeout')
 
-    def read_loop(self):
-        while True:
-            if self._disconnected:
-                self.logger.debug("Read loop encountered disconnect flag from "
-                                  "write, exiting")
-                break
+        if line == 'timeout':
+            t = time.time()
+            if not self.idle and (t - self.last_share_submit) > self.config['idle_worker_threshold']:
+                self.idle = True
+                self.server.idle_clients += 1
 
-            # designed to time out approximately "push_job_interval" after
-            # the user last recieved a job. Some miners will consider the
-            # mining server dead if they don't recieve something at least once
-            # a minute, regardless of whether a new job is _needed_. This
-            # aims to send a job _only_ as often as needed
-            line = with_timeout(time.time() - self.last_job_push + self.manager_config['push_job_interval'] - self.time_seed,
-                                self.fp.readline,
-                                timeout_value='timeout')
+            # push a new job if
+            if (t - self.last_share_submit) > self.config['idle_worker_disconnect_threshold']:
+                self.logger.info("Disconnecting worker {}.{} at ip {} for inactivity"
+                                 .format(self.address, self.worker, self.peer_name[0]))
+                self.stop()
 
-            # push a new job if we timed out
-            if line == 'timeout':
-                if not self.idle and (time.time() - self.last_share_submit) > self.manager_config['idle_worker_threshold']:
-                    self.idle = True
-                    manager.stratum.idle_clients += 1
+            if (self.authenticated is True and  # don't send to non-authed
+                # force send if we need to push a new difficulty
+                (self.next_diff != self.difficulty or
+                    # send if we're past the push interval
+                    t > (self.last_job_push +
+                         self.config['push_job_interval'] -
+                         self.time_seed))):
+                if self.config['vardiff']['enabled'] is True:
+                    self.recalc_vardiff()
+                self.push_job(timeout=True)
+            return
 
-                if (time.time() - self.last_share_submit) > self.manager_config['idle_worker_disconnect_threshold']:
-                    self.logger.info("Disconnecting worker {}.{} at ip {} for inactivity"
-                                     .format(self.address, self.worker, self.peer_name[0]))
-                    break
+        line = line.strip()
 
-                if (self.authenticated is True and  # don't send to non-authed
-                    # force send if we need to push a new difficulty
-                    (self.next_diff != self.difficulty or
-                     # send if we're past the push interval
-                     time.time() > (self.last_job_push +
-                                    self.manager_config['push_job_interval'] -
-                                    self.time_seed))):
-                    if self.config['vardiff']:
-                        self.recalc_vardiff()
-                    self.push_job(timeout=True)
-                continue
+        # Reading from a defunct connection yeilds an EOF character which gets
+        # stripped off
+        if not line:
+            raise LoopExit("Closed file descriptor encountered")
 
-            line = line.strip()
+        try:
+            data = json.loads(line)
+        except ValueError:
+            self.logger.warn("Data {}.. not JSON".format(line[:15]))
+            self.send_error()
+            return
 
-            # if there's data to read, parse it as json
-            if len(line):
+        # handle malformed data
+        data.setdefault('id', 1)
+        data.setdefault('params', [])
+
+        if __debug__:
+            self.logger.debug("Data {} recieved on client {}".format(data, self.id))
+
+        # run a different function depending on the action requested from
+        # user
+        if 'method' not in data:
+            self.logger.warn("Empty action in JSON {}".format(self.peer_name[0]))
+            self._incr('unk_err')
+            self.send_error(id_val=data['id'])
+            return
+
+        meth = data['method'].lower()
+        if meth == 'mining.subscribe':
+            if self.subscribed is True:
+                self.send_error(id_val=data['id'])
+                return
+
+            ret = {
+                'result': (
+                    (
+                        # These values aren't used for anything, although
+                        # perhaps they should be
+                        ("mining.set_difficulty", self.id),
+                        ("mining.notify", self.id)
+                    ),
+                    self.id,
+                    self.manager.config['extranonce_size']
+                ),
+                'error': None,
+                'id': data['id']
+            }
+            self.subscribed = True
+            self.logger.debug("Sending subscribe response: {}".format(pformat(ret)))
+            self.write_queue.put(json.dumps(ret) + "\n")
+
+        elif meth == "mining.authorize":
+            if self.subscribed is False:
+                self._incr('not_subbed_err')
+                self.send_error(25, id_val=data['id'])
+                return
+
+            if self.authenticated is True:
+                self._incr('not_authed_err')
+                self.send_error(24, id_val=data['id'])
+                return
+
+            try:
+                password = data['params'][1]
+                username = data['params'][0]
+                # allow the user to use the password field as an argument field
                 try:
-                    data = json.loads(line)
-                except ValueError:
-                    self.logger.warn("Data {}.. not JSON".format(line[:15]))
-                    self.send_error()
-                    continue
-            else:
-                # otherwise disconnect. Reading from a defunct connection yeilds
-                # an EOF character which gets stripped off
-                break
-
-            # set the msgid
-            self.msg_id = data.get('id', 1)
-            if __debug__:
-                self.logger.debug("Data {} recieved on client {}"
-                                  .format(data, self.id))
-
-            # run a different function depending on the action requested from
-            # user
-            if 'method' in data:
-                meth = data['method'].lower()
-                if meth == 'mining.subscribe':
-                    if self.subscribed is True:
-                        self.send_error(id_val=self.msg_id)
-                        continue
-
-                    self.subscribe(data)
-                elif meth == "mining.authorize":
-                    if self.subscribed is False:
-                        self._incr('not_subbed_err')
-                        self.send_error(25, id_val=self.msg_id)
-                        continue
-                    if self.authenticated is True:
-                        self._incr('not_authed_err')
-                        self.send_error(24, id_val=self.msg_id)
-                        continue
-
-                    self.authenticate(data)
-                elif meth == "mining.extranonce.subscribe":
-                    self.send_success(id_val=self.msg_id)
-                elif meth == "mining.submit":
-                    if self.authenticated is False:
-                        self._incr('not_authed_err')
-                        self.send_error(24, id_val=self.msg_id)
-                        continue
-
-                    self.submit_job(data)
-
-                    # don't recalc their diff more often than interval
-                    if (self.config['vardiff'] and
-                            (time.time() - self.last_diff_adj) > self.manager_config['vardiff']['interval']):
-                        self.recalc_vardiff()
+                    args = password_arg_parser.parse_args(password.split())
+                except ArgumentParserError:
+                    # Ignore malformed parser data
+                    pass
                 else:
-                    self.logger.warn("Unkown action {} for command {}"
-                                     .format(data['method'][:20], self.peer_name[0]))
-                    self._incr('unk_err')
-                    self.send_error(id_val=self.msg_id)
-            else:
-                self.logger.warn("Empty action in JSON {}"
-                                 .format(self.peer_name[0]))
-                self._incr('unk_err')
-                self.send_error(id_val=self.msg_id)
+                    if args.diff:
+                        self.difficulty = args.diff
+                        self.next_diff = args.diff
+            except IndexError:
+                password = ""
+                username = ""
+
+            self.logger.info("Authentication request from {} for username {}"
+                             .format(self.peer_name[0], username))
+            user_worker = self.convert_username(username)
+
+            # unpack into state dictionary
+            self.address, self.worker = user_worker
+            self.authenticated = True
+            self.server.set_user(self)
+
+            # notify of success authing and send him current diff and latest job
+            self.send_success(data['id'])
+            self.push_difficulty()
+            self.push_job()
+
+        elif meth == "mining.submit":
+            if self.authenticated is False:
+                self._incr('not_authed_err')
+                self.send_error(24, id_val=data['id'])
+                return
+
+            self.submit_job(data)
+
+            # don't recalc their diff more often than interval
+            if (self.config['vardiff']['enabled'] is True and
+                    (time.time() - self.last_diff_adj) > self.config['vardiff']['interval']):
+                self.recalc_vardiff()
+
+        elif meth == "mining.extranonce.subscribe":
+            self.send_success(id_val=data['id'])
+
+        else:
+            self.logger.warn("Unkown action {} for command {}"
+                             .format(data['method'][:20], self.peer_name[0]))
+            self._incr('unk_err')
+            self.send_error(id_val=data['id'])
+
+    @loop(fin='stop', exit_exceptions=(socket.error, ))
+    def write(self):
+        for item in self.write_queue:
+            self.fp.write(item)
+            self.fp.flush()
+
+    @property
+    def summary(self):
+        """ Displayed on the all client view in the http status monitor """
+        return dict(worker=self.worker, idle=self.idle)
+
+    @property
+    def last_share_submit_delta(self):
+        return datetime.datetime.utcnow() - datetime.datetime.utcfromtimestamp(self.last_share_submit)
+
+    @property
+    def details(self):
+        """ Displayed on the single client view in the http status monitor """
+        return dict(alltime_accepted_shares=self.accepted_shares,
+                    difficulty=self.difficulty,
+                    worker=self.worker,
+                    id=self.id,
+                    last_share_submit=str(self.last_share_submit_delta),
+                    idle=self.idle,
+                    address=self.address,
+                    ip_address=self.peer_name[0],
+                    connection_time=str(self.connection_duration))

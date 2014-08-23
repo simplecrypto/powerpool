@@ -2,11 +2,9 @@ from cryptokit.base58 import get_bcaddress_version
 
 import datetime
 import re
-import socket
 
 
 class GenericClient(object):
-
     def convert_username(self, username):
         # if the address they passed is a valid address,
         # use it. Otherwise use the pool address
@@ -17,42 +15,27 @@ class GenericClient(object):
             parsed_w = re.sub(r'[^a-zA-Z0-9\[\]_]+', '-', str(bits[1]))
             self.logger.debug("Registering worker name {}".format(parsed_w))
             worker = parsed_w[:16]
+
         try:
             version = get_bcaddress_version(username)
-            # Confirm that it's a valid version
-            if (self.manager_config['valid_address_versions'] and
-                    version not in self.manager_config['valid_address_versions']):
-                version = False
         except Exception:
             version = False
 
-        if version is not False:
+        if isinstance(version, int):
             address = username
         else:
+            # Filter all except underscores and letters
             filtered = re.sub('[\W_]+', '', username).lower()
             self.logger.debug(
                 "Invalid address passed in, checking aliases against {}"
                 .format(filtered))
-            if filtered in self.manager_config['aliases']:
-                address = self.manager_config['aliases'][filtered]
+            if filtered in self.config['aliases']:
+                address = self.config['aliases'][filtered]
                 self.logger.debug("Setting address alias to {}".format(address))
             else:
-                address = self.manager_config['donate_address']
+                address = "donate"
                 self.logger.debug("Falling back to donate address {}".format(address))
-
         return address, worker
-
-    def write_loop(self):
-        try:
-            for item in self.write_queue:
-                self.fp.write(item)
-                self.fp.flush()
-        except socket.error:
-            self._disconnected = True
-            self.logger.debug("Write loop terminated, setting flag for read")
-        except Exception:
-            self.logger.warn("Unhandled exception in write loop!", exc_info=True)
-            self._disconnected = True
 
     @property
     def connection_duration(self):

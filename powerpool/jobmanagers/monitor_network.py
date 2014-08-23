@@ -1,5 +1,4 @@
 import struct
-import urllib3
 import gevent
 import socket
 import time
@@ -8,74 +7,57 @@ import datetime
 from binascii import unhexlify, hexlify
 from collections import deque
 from cryptokit import bits_to_difficulty
-from cryptokit.rpc import CoinserverRPC, CoinRPCException
+from cryptokit.rpc import CoinRPCException
 from cryptokit.transaction import Transaction, Input, Output
 from cryptokit.block import BlockTemplate
 from cryptokit.bitcoin import data as bitcoin_data
 from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, spawn
+from gevent.event import Event
 
-from . import MonitorAuxNetwork, RPCException
-from ..lib import Component, loop, manager
-from ..utils import time_format
+from . import MonitorAuxNetwork, RPCException, NodeMonitorMixin, Jobmanager
+from ..lib import loop, REQUIRED
+from ..exceptions import ConfigurationError
 
 
-class MonitorNetwork(Component):
+class MonitorNetwork(Jobmanager, NodeMonitorMixin):
     one_min_stats = ['work_restarts', 'new_jobs', 'work_pushes']
-    defaults = config = dict(coinserv=None,
+    defaults = config = dict(coinservs=REQUIRED,
                              extranonce_serv_size=8,
                              extranonce_size=4,
                              diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
                              hashes_per_share=0xFFFF,
-                             merged=None,
+                             merged=tuple(),
                              block_poll=0.2,
                              job_refresh=15,
                              rpc_ping_int=2,
                              pow_block_hash=False,
                              poll=None,
-                             currency='',
+                             currency=REQUIRED,
+                             algo=REQUIRED,
                              pool_address='',
                              signal=None)
 
-    def _configure(self, config):
-        super(MonitorNetwork, self)._configure(config)
-        if not get_bcaddress_version(self.config['pool_address']):
-            self.logger.error("No valid pool address configured! Exiting.")
-            exit()
+    def __init__(self, config):
+        NodeMonitorMixin.__init__(self)
+        self._configure(config)
+        if get_bcaddress_version(self.config['pool_address']) is None:
+            raise ConfigurationError("No valid pool address configured! Exiting.")
 
-        # check that we have at least one configured coin server
-        if not self.config['main_coinservs']:
-            self.logger.error("Shit won't work without a coinserver to connect to")
-            exit()
-
-        # check that we have at least one configured coin server
-        if not self.config['currency']:
-            self.logger.error("Must define a currency")
-            exit()
-
-    def _setup(self):
-        # convenient access to global objects
+        # Since some MonitorNetwork objs are polling and some aren't....
         self.gl_methods = ['_monitor_nodes', '_check_new_jobs']
 
         # Aux network monitors (merged mining)
-        self.auxmons = {}
+        self.auxmons = []
 
         # internal vars
         self._last_gbt = {}
-        self._poll_connection = None  # our currently active RPC connection
-        self._down_connections = []  # list of RPC conns that are down
         self._job_counter = 0  # a unique job ID counter
-
-        # internal greenlets
-        self._node_monitor = None
-        self._height_poller = None
 
         # Currently active jobs keyed by their unique ID
         self.jobs = {}
-        self.live_connections = []  # list of live RPC connections
         self.latest_job = None  # The last job that was generated
-        # Latest job generation data from merge mining RPC servers
-        self.merged_work = {}
+        self.new_job = Event()
 
         # general current network stats
         self.current_net = dict(difficulty=None,
@@ -92,34 +74,21 @@ class MonitorNetwork(Component):
         self.recent_blocks = deque(maxlen=15)
 
         # start each aux chain monitor for merged mining
-        for coin in self.config['merged']:
-            if not coin['enabled']:
+        for config in self.config['merged']:
+            if not config['enabled']:
                 self.logger.info("Skipping aux chain support because it's disabled")
                 continue
 
-            self.logger.info("Aux network monitor for {} starting up"
-                             .format(coin['name']))
-            aux_network = MonitorAuxNetwork(manager, self, **coin)
-            aux_network.start()
-            self.auxmons[coin['name']] = aux_network
-
-        for serv in self.config['main_coinservs']:
-            conn = CoinserverRPC(
-                "http://{0}:{1}@{2}:{3}/"
-                .format(serv['username'],
-                        serv['password'],
-                        serv['address'],
-                        serv['port']),
-                pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
-            conn.config = serv
-            conn.name = "{}:{}".format(serv['address'], serv['port'])
-            self._down_connections.append(conn)
+            aux_network = MonitorAuxNetwork(config)
+            self.auxmons[config['name']] = aux_network
+            self.components[config['name']] = aux_network
 
         if self.config['signal']:
             self.logger.info("Listening for push block notifs on signal {}"
                              .format(self.config['signal']))
             gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
 
+        # Run the looping height poller if we aren't getting push notifications
         if (not self.config['signal'] and self.config['poll'] is None) or self.config['poll']:
             self.gl_methods.append('_poll_height')
 
@@ -136,32 +105,14 @@ class MonitorNetwork(Component):
         dct.update({key: val.summary() for key, val in self.counters.iteritems()})
         return dct
 
-    def found_merged_block(self, address, worker, header, job_id, coinbase_raw, typ):
-        """ Proxy method that sends merged blocks to the AuxChainMonitor for
-        submission """
-        try:
-            job = self.jobs[job_id]
-        except KeyError:
-            self.logger.error("Unable to submit block for job id {}, it "
-                              "doesn't exist anymore! Only {}".format(job_id, self.jobs.keys()))
-            return
-        self.auxmons[typ].found_block(address, worker, header, coinbase_raw, job)
-
-    def found_block(self, raw_coinbase, address, worker, hash_hex, header, job_id, start):
+    def found_block(self, raw_coinbase, address, worker, hash_hex, header, job, start):
         """ Submit a valid block (hopefully!) to the RPC servers """
-        try:
-            job = self.jobs[job_id]
-        except KeyError:
-            self.logger.error("Unable to submit block for job id {}, it "
-                              "doesn't exist anymore! only {}".format(job_id, self.jobs.keys()))
-            return
         block = hexlify(job.submit_serial(header, raw_coinbase=raw_coinbase))
-        recorded = []
+        result = {}
 
         def record_outcome(success):
-            if recorded:
+            if result:
                 return
-            recorded.append(True)
             self.logger.info("Recording block submission outcome {} after {}"
                              .format(success, time.time() - start))
 
@@ -169,19 +120,22 @@ class MonitorNetwork(Component):
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
                     dict(height=job.block_height, timestamp=int(time.time())))
-                manager.reporter.add_block(
-                    address=address,
-                    height=job.block_height,
-                    total_subsidy=job.total_value,
-                    fees=job.fee_total,
-                    hex_bits=hexlify(job.bits),
-                    hex_hash=hash_hex,
-                    worker=worker,
-                    algo=job.algo,
-                    merged=False,
-                    currency=self.config['currency'])
             else:
                 self.block_stats['rejects'] += 1
+
+            result.update(dict(
+                address=address,
+                height=job.block_height,
+                total_subsidy=job.total_value,
+                fees=job.fee_total,
+                hex_bits=hexlify(job.bits),
+                hex_hash=hash_hex,
+                worker=worker,
+                algo=job.algo,
+                merged=False,
+                success=success,
+                currency=self.config['currency']
+            ))
 
         def submit_block(conn):
             retries = 0
@@ -216,14 +170,14 @@ class MonitorNetwork(Component):
                 self.logger.info("Retry {} for connection {}".format(retries, conn.name))
 
         for tries in xrange(200):
-            if not self.live_connections:
+            if not self._live_connections:
                 self.logger.error("No live connections to submit new block to!"
                                   " Retry {} / 200.".format(tries))
                 sleep(0.1)
                 continue
 
             gl = []
-            for conn in self.live_connections:
+            for conn in self._live_connections:
                 # spawn a new greenlet for each submission to do them all async.
                 # lower orphan chance
                 gl.append(spawn(submit_block, conn))
@@ -231,7 +185,7 @@ class MonitorNetwork(Component):
             gevent.joinall(gl)
             # If none of the submission threads were successfull then record a
             # failure
-            if not recorded:
+            if not result:
                 record_outcome(False)
             break
 
@@ -253,131 +207,41 @@ class MonitorNetwork(Component):
             for trans in job.transactions:
                 self.logger.debug(str(trans.to_dict()))
 
-    def call_rpc(self, command, *args, **kwargs):
-        try:
-            return getattr(self.coinserv, command)(*args, **kwargs)
-        except (urllib3.exceptions.HTTPError, CoinRPCException) as e:
-            self.logger.warn("Unable to perform {} on RPC server. Got: {}"
-                             .format(command, e))
-            self.down_connection(self._poll_connection)
-            raise RPCException(e)
+        # Pass back all the results to the reporter who's waiting
+        return result
 
-    def down_connection(self, conn):
-        """ Called when a connection goes down. Removes if from the list of
-        live connections and recomputes a new. """
-        if not conn:
-            self.logger.warn("Tried to down a NoneType connection")
-            return
-        if conn in self.live_connections:
-            self.live_connections.remove(conn)
-
-        if self._poll_connection is conn:
-            # find the next best poll connection
-            try:
-                self._poll_connection = min(self.live_connections,
-                                            key=lambda x: x.config['poll_priority'])
-            except ValueError:
-                self._poll_connection = None
-                self.logger.error("No RPC connections available for polling!!!")
-            else:
-                self.logger.warn("RPC connection {} switching to poll_connection "
-                                 "after {} went down!"
-                                 .format(self._poll_connection.name, conn.name))
-
-        if conn not in self._down_connections:
-            self.logger.info("Server at {} now reporting down".format(conn.name))
-            self._down_connections.append(conn)
-
-    def _monitor_nodes(self):
-        while True:
-            remlist = []
-            for conn in self._down_connections:
-                try:
-                    conn.getinfo()
-                except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
-                    self.logger.info("RPC connection {} still down!".format(conn.name))
-                    continue
-
-                self.live_connections.append(conn)
-                remlist.append(conn)
-                self.logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
-
-                # if this connection has a higher priority than current
-                if self._poll_connection is not None:
-                    curr_poll = self._poll_connection.config['poll_priority']
-                    if conn.config['poll_priority'] > curr_poll:
-                        self.logger.info("RPC connection {} has higher poll priority than "
-                                         "current poll connection, switching..."
-                                         .format(conn.name))
-                        self._poll_connection = conn
-                else:
-                    self._poll_connection = conn
-                    self.logger.info("RPC connection {} defaulting poll connection"
-                                     .format(conn.name))
-
-            for conn in remlist:
-                self._down_connections.remove(conn)
-
-            sleep(self.config['rpc_ping_int'])
-
-    @loop()
-    def _check_new_jobs(self):
-        print "checking for new job!"
-        if self._poll_connection is None:
-            self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
-            sleep(1)
-            return
-
-        self.getblocktemplate()
-        sleep(self.config['job_refresh'])
-
-    @loop()
+    @loop(interval='block_poll')
     def _poll_height(self):
-        if self._poll_connection is None:
-            self.logger.warn("Couldn't connect to any RPC servers, sleeping for 1")
-            sleep(1)
-            return
-
-        # if there's a new block registered
-        if self.check_height():
-            self.logger.info("New block on main network detected")
-            # dump the current transaction pool, refresh and push the
-            # event
-            self.getblocktemplate(new_block=True)
-
-            sleep(self.config['block_poll'])
-
-    def check_height(self):
-        # check the block height
+        self._connected.wait()
         try:
-            height = self._poll_connection.getblockcount()
-        except Exception:
-            self.logger.warn("Unable to communicate with server that thinks it's live.")
-            self.down_connection(self._poll_connection)
-            return False
+            height = self.call_rpc('getblockcount')
+        except RPCException:
+            return
 
         if self.current_net['height'] != height:
+            self.logger.info("New block on main network detected with polling")
             self.current_net['height'] = height
-            return True
-        return False
+            self.getblocktemplate(new_block=True)
+
+    @loop(interval='job_refresh')
+    def _check_new_jobs(self):
+        self._connected.wait()
+        self.getblocktemplate()
 
     def getblocktemplate(self, new_block=False, signal=False):
-        dirty = False
         try:
             # request local memory pool and load it in
-            bt = self._poll_connection.getblocktemplate(
-                {'capabilities': [
-                    'coinbasevalue',
-                    'coinbase/append',
-                    'coinbase',
-                    'generation',
-                    'time',
-                    'transactions/remove',
-                    'prevblock',
-                ]})
-        except Exception as e:
-            self.logger.warn("Failed to fetch new job. Reason: {}".format(e), exc_info=True)
-            self.down_connection(self._poll_connection)
+            bt = self.call_rpc('getblocktemplate',
+                               {'capabilities': [
+                                   'coinbasevalue',
+                                   'coinbase/append',
+                                   'coinbase',
+                                   'generation',
+                                   'time',
+                                   'transactions/remove',
+                                   'prevblock',
+                               ]})
+        except RPCException:
             return False
 
         if self._last_gbt.get('height') != bt['height']:
@@ -391,6 +255,7 @@ class MonitorNetwork(Component):
             return
 
         # generate a new job if we got some new work!
+        dirty = False
         if bt != self._last_gbt:
             self._last_gbt = bt
             dirty = True
@@ -410,9 +275,17 @@ class MonitorNetwork(Component):
             self.logger.warn("Cannot generate new job, missing last GBT info")
             return
 
-        if self.merged_work:
-            tree, size = bitcoin_data.make_auxpow_tree(self.merged_work)
-            mm_hashes = [self.merged_work.get(tree.get(i), dict(hash=0))['hash']
+        if self.auxmons:
+            merged_work = {}
+            auxdata = {}
+            for auxmon in self.auxmons:
+                merged_work[auxmon.last_work['chainid']] = dict(
+                    hash=auxmon.last_work['hash'],
+                    target=auxmon.last_work['type']
+                )
+
+            tree, size = bitcoin_data.make_auxpow_tree(merged_work)
+            mm_hashes = [merged_work.get(tree.get(i), dict(hash=0))['hash']
                          for i in xrange(size)]
             mm_data = '\xfa\xbemm'
             mm_data += bitcoin_data.aux_pow_coinbase_type.pack(dict(
@@ -420,17 +293,17 @@ class MonitorNetwork(Component):
                 size=size,
                 nonce=0,
             ))
-            merged_data = {}
-            for aux_work in self.merged_work.itervalues():
-                data = dict(target=aux_work['target'],
-                            hash=aux_work['hash'],
-                            height=aux_work['height'],
-                            index=mm_hashes.index(aux_work['hash']),
-                            type=aux_work['type'],
+
+            for auxmon in self.auxmons:
+                data = dict(target=auxmon.last_work['target'],
+                            hash=auxmon.last_work['hash'],
+                            height=auxmon.last_work['height'],
+                            index=mm_hashes.index(auxmon.last_work['hash']),
+                            type=auxmon.last_work['type'],
                             hashes=mm_hashes)
-                merged_data[aux_work['type']] = data
+                auxdata[auxmon.config['currency']] = data
         else:
-            merged_data = {}
+            auxdata = {}
             mm_data = None
 
         self.logger.info("Generating new block template with {} trans. "
@@ -440,7 +313,7 @@ class MonitorNetwork(Component):
                                  bits_to_difficulty(self._last_gbt['bits']),
                                  self._last_gbt['coinbasevalue'] / 100000000.0,
                                  self._last_gbt['height'],
-                                 ', '.join(merged_data.keys())))
+                                 ', '.join(auxdata.keys())))
 
         # here we recalculate the current merkle branch and partial
         # coinbases for passing to the mining clients
@@ -478,7 +351,7 @@ class MonitorNetwork(Component):
         if mm_data:
             hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
             bt_obj.merkle_link = bitcoin_data.calculate_merkle_link([None] + hashes, 0)
-        bt_obj.merged_data = merged_data
+        bt_obj.merged_data = auxdata
         bt_obj.job_id = job_id
         bt_obj.diff1 = self.config['diff1']
         bt_obj.algo = self.config['algo']
@@ -486,13 +359,25 @@ class MonitorNetwork(Component):
         bt_obj.pow_block_hash = self.config['pow_block_hash']
         bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
+        bt_obj.flush = flush
+        bt_obj.found_block = self.found_block
 
-        if push:
-            if flush:
-                self._incr('work_restarts')
+        # Push the fresh job to users after updating details
+        self._job_counter += 1
+        if flush:
+            self.jobs.clear()
+        self.jobs[job_id] = bt_obj
+        self.latest_job = job_id
+        self.new_job.set()
+        self.new_job.clear()
+
+        # Stats and notifications now that it's pushed
+        if flush:
+            self._incr('work_restarts')
+            self.logger.info("New main network block announced! Wiping previous jobs and pushing")
+        elif push:
+            self.logger.info("New aux network block announced, pushing new job!")
             self._incr('work_pushes')
-
-        self._incr('new_jobs')
 
         if new_block:
             hex_bits = hexlify(bt_obj.bits)
@@ -501,30 +386,4 @@ class MonitorNetwork(Component):
             self.current_net['height'] = bt_obj.block_height - 1
             self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
             self.current_net['transactions'] = len(bt_obj.transactions)
-
-        self.new_job(bt_obj, job_id, push, flush, new_block)
-
-    def new_job(self, bt_obj, job_id, push=False, flush=False, new_block=False):
-        if push:
-            if flush:
-                self.logger.info("New work announced! Wiping previous jobs...")
-                self.jobs.clear()
-                self.latest_job = None
-            else:
-                self.logger.info("New work announced!")
-
-        self._job_counter += 1
-        self.jobs[job_id] = bt_obj
-        self.latest_job = job_id
-        if push:
-            t = time.time()
-            bt_obj.stratum_string()
-            for idx, client in manager.stratum.clients.iteritems():
-                try:
-                    if client.authenticated:
-                        client._push(bt_obj, flush=flush)
-                except AttributeError:
-                    pass
-            self.logger.info("New job enqueued for transmission to {} users in {}"
-                             .format(len(manager.stratum.clients),
-                                     time_format(time.time() - t)))
+        self._incr('new_jobs')

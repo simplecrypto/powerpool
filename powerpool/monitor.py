@@ -1,31 +1,17 @@
-from flask import (Flask, jsonify, abort, Blueprint, current_app,
-                   send_from_directory)
-from werkzeug.local import LocalProxy
-from collections import deque
+from flask import Flask, jsonify, abort, send_from_directory
 from cryptokit.block import BlockTemplate
 from cryptokit.transaction import Transaction
 from gevent.wsgi import WSGIServer, WSGIHandler
+from collections import deque
 
 from .utils import time_format
+from .lib import Component
 
 import os
 
 
-main = Blueprint('main', __name__)
-stratum_manager = LocalProxy(
-    lambda: getattr(current_app, 'stratum_manager', None))
-jobmanager = LocalProxy(
-    lambda: getattr(current_app, 'jobmanager', None))
-server = LocalProxy(
-    lambda: getattr(current_app, 'server', None))
-reporter = LocalProxy(
-    lambda: getattr(current_app, 'reporter', None))
-logger = LocalProxy(
-    lambda: getattr(current_app, 'real_logger', None))
-
-
 class Logger(object):
-    """ A dummp file object to allow using a logger to log requests instead
+    """ A dummy file object to allow using a logger to log requests instead
     of sending to stderr like the default WSGI logger """
     logger = None
 
@@ -48,38 +34,95 @@ class CustomWSGIHandler(WSGIHandler):
             delta)
 
 
-class MonitorWSGI(WSGIServer):
+class ServerMonitor(Component, WSGIServer):
+    """ Provides a few useful json endpoints for viewing server health and
+    performance. """
     # Use our custom wsgi handler
     handler_class = CustomWSGIHandler
+    defaults = dict(enabled=True,
+                    address="127.0.0.1",
+                    port=3855,
+                    DEBUG=False)
 
-    def __init__(self, server, DEBUG=False, address='127.0.0.1', port=3855, enabled=True, **kwargs):
-        """ Handles implementing default configurations """
-        logger = server.register_logger('monitor')
-        wsgi_logger = server.register_logger('monitor_wsgi')
-        if not enabled:
-            logger.info("HTTP monitor not enabled, not starting up...")
-            return
-        else:
-            logger.info("HTTP monitor enabled, starting up...")
-        app = Flask('monitor')
-        app.config.update(kwargs)
-        app.config['DEBUG'] = debug
-        app.register_blueprint(main)
+    def __init__(self, config):
+        self._configure(config)
+        app = Flask(__name__)
+        app.config.update(self.config)
+        app.add_url_rule('/', 'general', self.general)
+        app.add_url_rule('/debug', 'debug', self.debug)
+        app.add_url_rule('/client/<address>', 'client', self.client)
+        app.add_url_rule('/ip/<address>', 'ip_lookup', self.ip_lookup)
+        app.add_url_rule('/clients', 'clients', self.clients)
+        app.add_url_rule('/viewer/', 'viewer', self.viewer)
+        app.add_url_rule('/viewer/<path:filename>', 'viewer_sub', self.viewer)
+
+        self.viewer_dir = os.path.join(os.path.abspath(
+            os.path.dirname(__file__) + '/../'), 'viewer')
+        self.app = app
+
+    def start(self, *args, **kwargs):
+        self.logger.info("Stratum server starting up on {address}:{port}"
+                         .format(**self.config))
 
         # Monkey patch the wsgi logger
-        Logger.logger = wsgi_logger
-        app.real_logger = logger
+        Logger.logger = self.logger
+        WSGIServer.__init__(
+            self, (self.config['address'], self.config['port']), self.app, log=Logger())
 
-        # setup localproxy refs
-        app.manager = server
-        app.jobmanager = server.jobmanager
-        app.reporter = server.reporter
-        app.stratum_manager = server.stratum
-        WSGIServer.__init__(self, (address, port), app, log=Logger())
+        WSGIServer.start(self, *args, **kwargs)
+        Component.start(self)
 
     def stop(self, *args, **kwargs):
-        self.application.real_logger.info("Stopping monitoring server")
-        WSGIServer.stop(self, *args, **kwargs)
+        WSGIServer.close(self)
+        Component.stop(self)
+
+    def debug(self):
+        if not self.app.config['DEBUG']:
+            abort(403)
+        data = {}
+        for i, comp in enumerate(self.manager.components):
+            data[i] = jsonize(comp.__dict__)
+        return jsonify(data)
+
+    def general(self):
+        data = {}
+        for comp in self.manager.components:
+            try:
+                data[comp.__class__.__name__] = comp.status
+            except Exception:
+                data[comp.__class__.__name__] = "Component Error"
+                self.logger.error("Component {} raised invalid status"
+                                  .format(comp), exc_info=True)
+        return jsonify(data)
+
+    def client(self, address):
+        try:
+            clients = self.manager.component_types['StratumServer'].address_lut[address]
+        except KeyError:
+            abort(404)
+
+        reporter = self.manager.component_types['Reporter'][0]
+        return jsonify(**{address: [getattr(reporter.addresses.get(address), 'status', None)] +
+                          [client.details for client in clients]})
+
+    def ip_lookup(self, address):
+        clients = self.manager.component_types['StratumServer'][0].clients
+        clients = [client.details for client in clients.itervalues()
+                   if getattr(client, 'peer_name', [False])[0] == address]
+
+        return jsonify(**{address: clients})
+
+    def clients(self):
+        lut = self.manager.component_types['StratumServer'][0].address_lut
+        clients = {key: [item.summary for item in value]
+                   for key, value in lut.iteritems()}
+
+        return jsonify(clients=clients)
+
+    def viewer(self, filename=None):
+        if not filename:
+            filename = "index.html"
+        return send_from_directory(self.viewer_dir, filename)
 
 
 def jsonize(item):
@@ -115,137 +158,3 @@ def jsonize(item):
             return item
         else:
             return str(item)
-
-
-@main.route('/debug')
-def debug():
-    if not current_app.config['DEBUG']:
-        abort(403)
-    server = current_app.config['server']
-    return jsonify(server=jsonize(server.__dict__),
-                   netmon=jsonize(server.netmon.__dict__),
-                   stratum_clients=jsonize(server.stratum_clients),
-                   stratum_clients_addr_lut=jsonize(server.stratum_clients.address_lut.items()),
-                   stratum_clients_worker_lut=jsonize(server.stratum_clients.addr_worker_lut.items())
-                   )
-
-
-@main.route('/')
-def general():
-    return jsonify(stratum_manager=stratum_manager.status,
-                   reporter=reporter.status,
-                   jobmanager=jobmanager.status,
-                   server=server.status)
-
-
-@main.route('/client/<address>')
-def client(address=None):
-    try:
-        clients = stratum_manager.address_lut[address]
-    except KeyError:
-        abort(404)
-
-    return jsonify(**{address: [getattr(reporter.addresses.get(address), 'status', None)] +
-                      [client.details for client in clients]})
-
-
-@main.route('/ip/<address>')
-def ip_lookup(address=None):
-    clients = [client.details for client in stratum_manager.clients.itervalues()
-               if getattr(client, 'peer_name', [False])[0] == address]
-
-    return jsonify(**{address: clients})
-
-
-@main.route('/clients')
-def clients():
-    lut = stratum_manager.address_lut
-    clients = {key: [item.summary for item in value]
-               for key, value in lut.iteritems()}
-
-    return jsonify(clients=clients)
-
-
-@main.route('/agents')
-def agents():
-    agent_clients = current_app.config['agent_clients']
-    agents = {key: value.summary for key, value in agent_clients.iteritems()}
-
-    return jsonify(agents=agents)
-
-
-class SecondStatManager(object):
-    """ Monitors the last 60 minutes of a specific number at 1 minute precision
-    and the last 1 minute of a number at 1 second precision. Essentially a
-    counter gets incremented and rotated through a circular buffer.
-    """
-    def __init__(self):
-        self._val = 0
-        self.mins = deque([], 60)
-        self.seconds = deque([], 60)
-        self.total = 0
-
-    def incr(self, amount=1):
-        """ Increments the counter """
-        self._val += amount
-
-    def tick(self):
-        """ should be called once every second """
-        self.seconds.append(self._val)
-        self.total += self._val
-        self._val = 0
-
-    def tock(self):
-        # rotate the total into a minute slot
-        last_min = sum(self.seconds)
-        self.mins.append(last_min)
-        return last_min
-
-    @property
-    def hour(self):
-        return sum(self.mins)
-
-    @property
-    def minute(self):
-        if len(self.mins):
-            return self.mins[-1]
-        return 0
-
-    @property
-    def second_avg(self):
-        return sum(self.seconds) / 60.0
-
-    @property
-    def min_avg(self):
-        return sum(self.mins) / 60.0
-
-    def summary(self):
-        return dict(total=self.total,
-                    min_total=self.minute,
-                    hour_total=self.hour,
-                    min_avg=self.min_avg)
-
-
-class MinuteStatManager(SecondStatManager):
-    """ Monitors the last 60 minutes of a specific number at 1 minute precision
-    """
-    def __init__(self):
-        SecondStatManager.__init__(self)
-        self._val = 0
-        self.mins = deque([], 60)
-        self.total = 0
-
-    def tock(self):
-        """ should be called once every minute """
-        self.mins.append(self._val)
-        self.total += self._val
-        self._val = 0
-
-
-viewer_dir = os.path.join(os.path.abspath(os.path.dirname(__file__) + '/../'), 'viewer')
-@main.route('/viewer/')
-@main.route('/viewer/<path:filename>')
-def viewer(filename=None):
-    if not filename:
-        filename = "index.html"
-    return send_from_directory(viewer_dir, filename)

@@ -4,6 +4,20 @@ import importlib
 import cProfile
 
 
+class Benchmark(object):
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.start = time.time()
+
+    def __exit__(self, ty, val, tb):
+        end = time.time()
+        print("BENCHMARK: {} in {}"
+              .format(self.name, time_format(end - self.start)))
+        return False
+
+
 def profileit(func):
     def wrapper(*args, **kwargs):
         datafn = func.__name__ + ".profile"  # Name the data file sensibly
@@ -36,7 +50,8 @@ def recursive_update(d, u):
 
 def import_helper(dotted_path):
     module, cls = dotted_path.rsplit(".", 1)
-    return getattr(importlib.import_module(module), cls)
+    module = importlib.import_module(module)
+    return getattr(module, cls)
 
 
 def timeit(method):

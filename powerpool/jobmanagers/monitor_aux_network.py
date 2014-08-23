@@ -9,42 +9,30 @@ from collections import deque
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep, Greenlet
+from gevent.event import Event
 
-from . import RPCException
+from . import RPCException, NodeMonitorMixin, Jobmanager
+from ..lib import loop, REQUIRED
 
 
-class MonitorAuxNetwork(Greenlet):
+class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
+    gl_methods = ['_monitor_nodes', '_check_new_jobs']
     one_min_stats = ['work_restarts', 'new_jobs']
 
-    def _set_config(self, **config):
-        # A fast way to set defaults for the kwargs then set them as attributes
-        self.config = dict(enabled=False,
-                           name=None,
-                           work_interval=1,
-                           signal=None,
-                           coinserv=[],
-                           flush=False,
-                           send=True)
-        self.config.update(config)
+    defaults = dict(enabled=False,
+                    work_interval=1,
+                    signal=None,
+                    currency=REQUIRED,
+                    coinserv=REQUIRED,
+                    flush=False,
+                    send=True)
 
-        # check that we have at least one configured coin server
-        if not self.config['coinservs']:
-            self.logger.error("Shit won't work without a coinserver to connect to")
-            exit()
+    def __init__(self, config):
+        self._configure(config)
+        NodeMonitorMixin.__init__(self)
 
-        # check that we have at least one configured coin server
-        if not self.config['name'] or not self.config['reporting_id']:
-            self.logger.error("Merge mined coins must have an reporting_id and name")
-            exit()
-
-    def __init__(self, server, jobmanager, **config):
-        Greenlet.__init__(self)
-        self._set_config(**config)
-        self.prefix = self.config['name'] + "_"
-        self.jobmanager = jobmanager
-        self.server = server
-        self.reporter = server.reporter
-        self.logger = server.register_logger('auxmonitor_{}'.format(self.config['name']))
+        self.new_job = Event()
+        self.last_work = {'hash': None}
         self.block_stats = dict(accepts=0,
                                 rejects=0,
                                 solves=0,
@@ -54,36 +42,16 @@ class MonitorAuxNetwork(Greenlet):
         self.current_net = dict(difficulty=None, height=None)
         self.recent_blocks = deque(maxlen=15)
 
-        # create an instance local one_min_stats for use in the def status func
-        self.one_min_stats = [self.prefix + key for key in self.one_min_stats]
-        self.server.register_stat_counters(self.one_min_stats)
-
-        self.coinservs = self.config['coinservs']
-        self.coinserv = CoinserverRPC(
-            "http://{0}:{1}@{2}:{3}/"
-            .format(self.coinservs[0]['username'],
-                    self.coinservs[0]['password'],
-                    self.coinservs[0]['address'],
-                    self.coinservs[0]['port']),
-            pool_kwargs=dict(maxsize=self.coinservs[0].get('maxsize', 10)))
-        self.coinserv.config = self.coinservs[0]
-
         if self.config['signal']:
+            self.logger.info("Listening for push block notifs on signal {}"
+                             .format(self.config['signal']))
             gevent.signal(self.config['signal'], self.update, reason="Signal recieved")
 
-    def call_rpc(self, command, *args, **kwargs):
-        try:
-            return getattr(self.coinserv, command)(*args, **kwargs)
-        except (urllib3.exceptions.HTTPError, CoinRPCException) as e:
-            self.logger.warn("Unable to perform {} on RPC server. Got: {}"
-                             .format(command, e))
-            raise RPCException(e)
-
-    def found_block(self, address, worker, header, coinbase_raw, job):
-        aux_data = job.merged_data[self.config['name']]
+    def found_block(self, address, worker, header, coinbase_raw, job, start):
+        aux_data = job.merged_data[self.config['currency']]
         self.block_stats['solves'] += 1
         self.logger.info("New {} Aux block at height {}"
-                         .format(self.config['name'], aux_data['height']))
+                         .format(self.config['currency'], aux_data['height']))
         aux_block = (
             pack.IntType(256, 'big').pack(aux_data['hash']).encode('hex'),
             bitcoin_data.aux_pow_type.pack(dict(
@@ -107,11 +75,11 @@ class MonitorAuxNetwork(Greenlet):
                 res = self.coinserv.getauxblock(*aux_block)
             except (CoinRPCException, socket.error, ValueError) as e:
                 self.logger.error("{} Aux block failed to submit to the server!"
-                                  .format(self.config['name']), exc_info=True)
+                                  .format(self.config['currency']), exc_info=True)
                 self.logger.error(getattr(e, 'error'))
 
             if res is True:
-                self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(self.config['name']))
+                self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(self.config['currency']))
                 # Record it for the stats
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
@@ -120,7 +88,7 @@ class MonitorAuxNetwork(Greenlet):
                 # submit it to our reporter if configured to do so
                 if self.config['send']:
                     self.logger.info("Submitting {} new block to reporter"
-                                     .format(self.config['name']))
+                                     .format(self.config['currency']))
                     # A horrible mess that grabs the required information for
                     # reporting the new block. Pretty failsafe so at least
                     # partial information will be reporter regardless
@@ -141,21 +109,21 @@ class MonitorAuxNetwork(Greenlet):
                         amount = -1
 
                     self.block_stats['last_solve_hash'] = hsh
-                    self.reporter.add_block(
-                        address,
-                        new_height,
-                        int(amount * 100000000),
-                        -1,
-                        "%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
-                        hsh,
-                        merged=self.config['reporting_id'],
-                        worker=worker)
+                    return dict(address=address,
+                                height=new_height,
+                                total_subsidy=int(amount * 100000000),
+                                fees=-1,
+                                hex_bits="%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
+                                hash=hsh,
+                                merged=self.config['currency'],
+                                algo=self.config['algo'],
+                                worker=worker)
 
                 break  # break retry loop if success
             else:
                 self.logger.error(
                     "{} Aux Block failed to submit to the server, "
-                    "server returned {}!".format(self.config['name'], res),
+                    "server returned {}!".format(self.config['currency'], res),
                     exc_info=True)
             sleep(1)
         else:
@@ -165,10 +133,11 @@ class MonitorAuxNetwork(Greenlet):
         self.block_stats['last_solve_worker'] = "{}.{}".format(address, worker)
         self.block_stats['last_solve_time'] = datetime.datetime.utcnow()
 
-    def update(self, reason=None):
+    @loop(interval='work_interval')
+    def _check_new_jobs(self, reason=None):
         if reason:
             self.logger.info("Updating {} aux work from a signal recieved!"
-                             .format(self.config['name']))
+                             .format(self.config['currency']))
 
         try:
             auxblock = self.call_rpc('getauxblock')
@@ -176,12 +145,8 @@ class MonitorAuxNetwork(Greenlet):
             sleep(2)
             return False
 
-        new_merged_work = dict(
-            hash=int(auxblock['hash'], 16),
-            target=pack.IntType(256).unpack(auxblock['target'].decode('hex')),
-            type=self.config['name']
-        )
-        if new_merged_work['hash'] != self.jobmanager.merged_work.get(auxblock['chainid'], {'hash': None})['hash']:
+        hash = int(auxblock['hash'], 16)
+        if auxblock['hash'] != self.last_work['hash']:
             # We fetch the block height so we can see if the hash changed
             # because of a new network block, or because new transactions
             try:
@@ -189,24 +154,31 @@ class MonitorAuxNetwork(Greenlet):
             except RPCException:
                 sleep(2)
                 return False
-            self.logger.info("New aux work announced! Diff {:,.4f}. Height {:,}"
-                             .format(bitcoin_data.target_to_difficulty(new_merged_work['target']),
-                                     height))
-            # add height to work spec for future logging
-            new_merged_work['height'] = height
 
-            self.jobmanager.merged_work[auxblock['chainid']] = new_merged_work
-            self.current_net['difficulty'] = bitcoin_data.target_to_difficulty(pack.IntType(256).unpack(auxblock['target'].decode('hex')))
+            target_int = pack.IntType(256).unpack(auxblock['target'].decode('hex'))
+            self.last_work.update(dict(
+                hash=hash,
+                target=target_int,
+                type=self.config['currency'],
+                height=height,
+                found_block=self.found_block,
+                chainid=auxblock['chainid']
+            ))
 
             # only push the job if there's a new block height discovered.
             if self.current_net['height'] != height:
                 self.current_net['height'] = height
                 self.jobmanager.generate_job(push=True, flush=self.config['flush'])
-                self.server[self.prefix + "work_restarts"].incr()
-                self.server[self.prefix + "new_jobs"].incr()
+                self._incr("work_restarts")
+                self._incr("new_jobs")
             else:
-                self.jobmanager.generate_job()
-                self.server[self.prefix + "new_jobs"].incr()
+                self.new_job.set()
+                self.new_job.clear()
+                self._incr("new_jobs")
+
+            self.current_net['difficulty'] = bitcoin_data.target_to_difficulty(target_int)
+            self.logger.info("New aux work announced! Diff {:,.4f}. Height {:,}"
+                             .format(self.current_net['difficulty'], height))
 
         return True
 
@@ -218,21 +190,3 @@ class MonitorAuxNetwork(Greenlet):
         dct.update({key[chop:]: self.server[key].summary()
                     for key in self.one_min_stats})
         return dct
-
-    def kill(self, *args, **kwargs):
-        """ Override our default kill method and kill our child greenlets as
-        well """
-        self.logger.info("Auxilury network monitor for {} shutting down..."
-                         .format(self.config['name']))
-        Greenlet.kill(self, *args, **kwargs)
-
-    def _run(self):
-        self.logger.info("Auxilury network monitor for {} starting up..."
-                         .format(self.config['name']))
-        while True:
-            # if update returns unable to connect, retry...
-            if not self.update():
-                continue
-
-            # repeat this on an interval
-            sleep(self.config['work_interval'])
