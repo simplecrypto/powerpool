@@ -18,7 +18,7 @@ from .agent_server import AgentServer
 from .exceptions import LoopExit
 from .server import GenericClient
 from .utils import time_format
-from .lib import Component, loop
+from .lib import Component, loop, REQUIRED
 
 
 class ArgumentParserError(Exception):
@@ -42,6 +42,7 @@ class StratumServer(Component, StreamServer):
     defaults = dict(address="0.0.0.0",
                     port=3333,
                     start_difficulty=128,
+                    algo=REQUIRED,
                     idle_worker_threshold=300,
                     aliases={},
                     vardiff=dict(enabled=False,

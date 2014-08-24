@@ -9,6 +9,8 @@ from ..lib import loop
 class RedisReporter(StatReporter):
     one_sec_stats = ['queued']
     gl_methods = ['_queue_proc']
+    defaults = StatReporter.defaults.copy()
+    defaults.update(dict(redis={}))
 
     def __init__(self, config):
         self._configure(config)

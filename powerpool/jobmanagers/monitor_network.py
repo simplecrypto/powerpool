@@ -73,16 +73,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                                 last_solve_worker=None)
         self.recent_blocks = deque(maxlen=15)
 
-        # start each aux chain monitor for merged mining
-        for config in self.config['merged']:
-            if not config['enabled']:
-                self.logger.info("Skipping aux chain support because it's disabled")
-                continue
-
-            aux_network = MonitorAuxNetwork(config)
-            self.auxmons[config['name']] = aux_network
-            self.components[config['name']] = aux_network
-
         if self.config['signal']:
             self.logger.info("Listening for push block notifs on signal {}"
                              .format(self.config['signal']))
@@ -104,6 +94,20 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
 
         dct.update({key: val.summary() for key, val in self.counters.iteritems()})
         return dct
+
+    def start(self):
+        Jobmanager.start(self)
+        # Find desired auxmonitors
+        self.config['merged'] = set(self.config['merged'])
+        found_merged = set()
+
+        for mon in self.manager.component_types['Jobmanager']:
+            if mon.key in self.config['merged']:
+                self.auxmons.append(mon)
+                found_merged.add(mon.key)
+
+        for monitor in self.config['merged'] - found_merged:
+            self.logger.error("Unable to locate Auxmonitor '{}'".format(monitor))
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job, start):
         """ Submit a valid block (hopefully!) to the RPC servers """

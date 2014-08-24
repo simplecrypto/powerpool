@@ -52,9 +52,9 @@ class PowerPool(Component):
     manager = None
     gl_methods = ['_tick_stats']
     defaults = dict(procname="powerpool",
-                    term_timeout=3,
-                    default_component_log_level='NOTSET',
-                    loggers=[{'type': 'StreamHandler', 'level': 'DEBUG'}],
+                    term_timeout=10,
+                    default_component_log_level='INFO',
+                    loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
                     algorithms=dict(x11="drk_hash.getPoWHash",
                                     scrypt="ltc_scrypt.getPoWHash",
                                     scryptn="vtc_scrypt.getPoWHash",
@@ -65,14 +65,13 @@ class PowerPool(Component):
     def from_raw_config(self, raw_config):
         components = []
         types = [PowerPool, Reporter, Jobmanager, StratumServer]
-        component_types = {'other': []}
+        component_types = {cls.__name__: [] for cls in types}
+        component_types['other'] = []
         for item in raw_config:
             obj = import_helper(item['type'])(item)
             for typ in types:
                 if isinstance(obj, typ):
-                    key = typ.__name__
-                    lst = component_types.setdefault(key, [])
-                    lst.append(obj)
+                    component_types[typ.__name__].append(obj)
                     break
             else:
                 component_types['other'].append(obj)

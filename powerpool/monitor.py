@@ -39,8 +39,7 @@ class ServerMonitor(Component, WSGIServer):
     performance. """
     # Use our custom wsgi handler
     handler_class = CustomWSGIHandler
-    defaults = dict(enabled=True,
-                    address="127.0.0.1",
+    defaults = dict(address="127.0.0.1",
                     port=3855,
                     DEBUG=False)
 

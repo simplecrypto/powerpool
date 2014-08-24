@@ -128,6 +128,7 @@ class Component(object):
     # Provides default configuration values. To make a configuration key required
     # simply make the value = REQUIRED
     defaults = dict()
+    key = None
     # A list of class methods that are independent greenlets. These will
     # automatically get started and stopped at appropriate times.
     gl_methods = []
@@ -151,6 +152,7 @@ class Component(object):
         if ('log_level' in self.config and
                 self.config['log_level'] not in ['DEBUG', 'INFO', 'WARN', 'ERROR']):
             raise ConfigurationError("Invalid logging level specified")
+        self.key = self.config.get('key')
 
     def __getitem__(self, key):
         """ Easy access to configuration values! """

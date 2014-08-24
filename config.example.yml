@@ -1,0 +1,38 @@
+# -----------------------------------------
+# PowerPool configuration file
+# -----------------------------------------
+# Each item in the list is a discreet component in powerpool that will get
+# created Type specifies the fully qualified python path to the module. A basic
+# powerpool server will contain one of each of the following:
+# * Jobmanager: creates jobs to be sent to miners and submits solved blocks
+# * StratumServer: Accepts stratum connections and sends jobs to users, accepts
+#       shares, etc
+# * Reporter: records submitted shares and solved blocks
+# * Manager: Manages logging, starting and stopping the server, and stats
+#       collection
+#
+# Optional modules:
+# * ServerMonitor: Exposes and HTTP port to view system health and connected
+#       worker information
+#
+# Each of these modules has default configurations which can be viewed
+# and explained in the defaults.yml file
+---
+- type: powerpool.main.PowerPool
+- type: powerpool.reporters.RedisReporter
+- type: powerpool.jobmanagers.MonitorNetwork
+  algo: scrypt
+  currency: TCO
+  pool_address: mq9tyXyKdTMp6ZqusEtCAxzSxp9yT7mdXe
+  coinservs:
+      - port: 20001
+        address: 127.0.0.1
+        username: admin1
+        password: 123
+        poll_priority: 100
+
+- type: powerpool.stratum_server.StratumServer
+  algo: scrypt
+  start_difficulty: 1
+
+- type: powerpool.monitor.ServerMonitor
