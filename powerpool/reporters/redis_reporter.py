@@ -85,7 +85,11 @@ class RedisReporter(StatReporter):
         block_key = 'current_block_{}_{}'.format(currency, algo)
         new_block_key = "unproc_block_{}".format(hex_hash)
 
-        self.solve_cmd(keys=[], args=[block_key, time.time(), new_block_key])
+        chain_indexes_serial = self.solve_cmd(keys=[], args=[block_key, time.time(), new_block_key])
+        chain_indexs = {}
+        for chain in chain_indexes_serial:
+            chain_id, last_index = chain.split(":")
+            chain_indexs["chain_{}_solve_index".format(chain_id)] = last_index
         self.redis.hmset(new_block_key, dict(address=address,
                                              worker=worker,
                                              height=height,
@@ -94,7 +98,8 @@ class RedisReporter(StatReporter):
                                              hex_bits=hex_bits,
                                              hash=hex_hash,
                                              currency=currency,
-                                             algo=algo))
+                                             algo=algo,
+                                             **chain_indexs))
 
     def _queue_log_share(self, address, shares, algo, currency, merged=False):
         block_key = 'current_block_{}_{}'.format(currency, algo)
