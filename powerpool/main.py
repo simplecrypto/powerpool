@@ -53,6 +53,8 @@ class PowerPool(Component):
     gl_methods = ['_tick_stats']
     defaults = dict(procname="powerpool",
                     term_timeout=10,
+                    extranone_serv_size=8,
+                    extranonce_size=4,
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
                     algorithms=dict(x11="drk_hash.getPoWHash",
@@ -222,8 +224,6 @@ class PowerPool(Component):
             # registered
             if not keys or name in keys:
                 logger.addHandler(handler)
-                # handlers will manage level, so just propogate everything
-                logger.setLevel(logging.DEBUG)
 
         return logger
 

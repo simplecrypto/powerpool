@@ -20,6 +20,9 @@
 ---
 - type: powerpool.main.PowerPool
 - type: powerpool.reporters.RedisReporter
+#log_level: DEBUG
+  redis:
+      db: 15
 - type: powerpool.jobmanagers.MonitorNetwork
   algo: scrypt
   currency: TCO
