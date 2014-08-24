@@ -4,6 +4,7 @@ from gevent import sleep
 from gevent.queue import Queue
 from . import StatReporter
 from ..lib import loop
+from ..stratum_server import StratumClient
 
 
 # Parameters: {"current block"'s key name,
@@ -41,7 +42,7 @@ return idx_map
 
 class RedisReporter(StatReporter):
     one_sec_stats = ['queued']
-    gl_methods = ['_queue_proc']
+    gl_methods = ['_queue_proc', '_report_one_min']
     defaults = StatReporter.defaults.copy()
     defaults.update(dict(redis={},
                          chain=1))
@@ -76,7 +77,7 @@ class RedisReporter(StatReporter):
         # Include worker info if defined
         address += "." + worker
         self.redis.hincrbyfloat(
-            "min_{}_{}_{}".format(self.share_type_strings[typ], algo, stamp),
+            "min_{}_{}_{}".format(StratumClient.share_type_strings[typ], algo, stamp),
             address, amount)
 
     def _queue_add_block(self, address, height, total_subsidy, fees, hex_bits,
@@ -99,6 +100,7 @@ class RedisReporter(StatReporter):
                                              hash=hex_hash,
                                              currency=currency,
                                              algo=algo,
+                                             merged=merged,
                                              **chain_indexs))
 
     def _queue_log_share(self, address, shares, algo, currency, merged=False):

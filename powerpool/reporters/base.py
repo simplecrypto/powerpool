@@ -115,12 +115,12 @@ class StatReporter(Reporter):
         slc = self._minute_slices.setdefault(slc_time, {})
         # log the share under user "pool" to allow easy/fast display of pool stats
         if self.config['report_pool_stats']:
-            self._aggr_one_min("pool", self.config['pool_worker'], algo, diff, typ, slc)
-        self._aggr_one_min(address, worker, algo, diff, typ, slc)
+            self._aggr_one_min("pool", self.config['pool_worker'], algo, typ, diff, slc)
+        self._aggr_one_min(address, worker, algo, typ, diff, slc)
 
         # reporting for vardiff rates
         if typ == StratumClient.VALID_SHARE:
-            slc = self._minute_slices.setdefault(slc_time, {})
+            slc = self._per_address_slices.setdefault(slc_time, {})
             if address not in slc:
                 slc[address] = diff
             else:
@@ -133,7 +133,7 @@ class StatReporter(Reporter):
         else:
             slc[key] += amount
 
-    @loop(interval=61, precise=True)
+    @loop(interval=61, precise=60)
     def _report_one_min(self):
         try:
             self._process_minute_slices()
@@ -153,7 +153,7 @@ class StatReporter(Reporter):
         for stamp, data in self._minute_slices.items():
             if flush or stamp < upper:
                 for (address, worker, algo, typ), amount in data.iteritems():
-                    self.log_one_minute(address, worker, algo, typ, amount)
+                    self.log_one_minute(address, worker, algo, stamp, typ, amount)
                     # XXX: GreenletExit getting raised here might cause some
                     # double reporting!
                 del self._minute_slices[stamp]

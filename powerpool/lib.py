@@ -64,10 +64,14 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
         def wrapper(self, *args, **kwargs):
             if isinstance(interval, basestring):
                 interval_val = self.config[interval]
+            else:
+                interval_val = interval
             if precise and not interval:
                 raise ValueError("Cannot perform precise timing without an interval")
             if precise is True:
                 precise_val = interval
+            else:
+                precise_val = precise
 
             # Make class methods properly bounded
             if isinstance(fin, basestring):
