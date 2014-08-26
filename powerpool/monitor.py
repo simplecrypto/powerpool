@@ -51,13 +51,20 @@ class ServerMonitor(Component, WSGIServer):
         app.add_url_rule('/debug', 'debug', self.debug)
         app.add_url_rule('/client/<address>', 'client', self.client)
         app.add_url_rule('/ip/<address>', 'ip_lookup', self.ip_lookup)
-        app.add_url_rule('/clients', 'clients', self.clients)
         app.add_url_rule('/viewer/', 'viewer', self.viewer)
         app.add_url_rule('/viewer/<path:filename>', 'viewer_sub', self.viewer)
+        # Legacy
+        app.add_url_rule('/05/clients/', 'clients', self.clients_0_5)
+        app.add_url_rule('/05/', 'general_0_5', self.general_0_5)
 
         self.viewer_dir = os.path.join(os.path.abspath(
             os.path.dirname(__file__) + '/../'), 'viewer')
         self.app = app
+        WSGIServer.__init__(self, (self.config['address'],
+                                   self.config['port']),
+                            self.app,
+                            spawn=100,
+                            log=Logger())
 
     def start(self, *args, **kwargs):
         self.logger.info("Stratum server starting up on {address}:{port}"
@@ -65,14 +72,13 @@ class ServerMonitor(Component, WSGIServer):
 
         # Monkey patch the wsgi logger
         Logger.logger = self.logger
-        WSGIServer.__init__(
-            self, (self.config['address'], self.config['port']), self.app, log=Logger())
 
         WSGIServer.start(self, *args, **kwargs)
         Component.start(self)
 
     def stop(self, *args, **kwargs):
-        WSGIServer.close(self)
+        self.close()
+        self.pool.kill(block=False)
         Component.stop(self)
 
     def debug(self):
@@ -96,7 +102,7 @@ class ServerMonitor(Component, WSGIServer):
 
     def client(self, address):
         try:
-            clients = self.manager.component_types['StratumServer'].address_lut[address]
+            clients = self.manager.component_types['StratumServer'][0].address_lut[address]
         except KeyError:
             abort(404)
 
@@ -111,17 +117,22 @@ class ServerMonitor(Component, WSGIServer):
 
         return jsonify(**{address: clients})
 
-    def clients(self):
+    def viewer(self, filename=None):
+        if not filename:
+            filename = "index.html"
+        return send_from_directory(self.viewer_dir, filename)
+
+    def clients_0_5(self):
+        """ Legacy client view emulating version 0.5 support """
         lut = self.manager.component_types['StratumServer'][0].address_lut
         clients = {key: [item.summary for item in value]
                    for key, value in lut.iteritems()}
 
         return jsonify(clients=clients)
 
-    def viewer(self, filename=None):
-        if not filename:
-            filename = "index.html"
-        return send_from_directory(self.viewer_dir, filename)
+    def general_0_5(self):
+        """ Legacy 0.5 emulating view """
+        return jsonify(stratum_manager=self.manager.component_types['StratumServer'][0].status)
 
 
 def jsonize(item):

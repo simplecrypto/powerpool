@@ -14,10 +14,6 @@ from ..stratum_server import StratumClient
 
 class Reporter(Component):
     """ An abstract base class to document the Reporter interface. """
-    one_min_stats = ['reject_low_share_n1', 'reject_dup_share_n1', 'reject_stale_share_n1',
-                     'acc_share_n1', 'reject_low_share_count', 'reject_dup_share_count',
-                     'reject_stale_share_count', 'acc_share_count']
-
     def agent_send(self, address, worker, typ, data, time):
         """ Called when valid data is recieved from a PPAgent connection. """
         raise NotImplementedError
@@ -35,14 +31,6 @@ class Reporter(Component):
         self.logger.debug("Running log share with args {} kwargs {}"
                           .format((client.id, diff, typ, params), dict(job=job,
                                   header_hash=header_hash, header=hexlify(header))))
-
-        # Log the share to our stat counters
-        key = ""
-        if typ > 0:
-            key += "reject_"
-        key += StratumClient.share_type_strings[typ] + "_share"
-        self._incr(key + "_n1", diff)
-        self._incr(key + "_count")
 
         if typ == StratumClient.VALID_SHARE:
             start = time.time()

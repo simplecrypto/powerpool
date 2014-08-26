@@ -31,7 +31,6 @@ class CeleryReporter(StatReporter):
     def status(self):
         dct = dict(queue_size=self.queue.qsize(),
                    unrep_shares=len(self._aggr_shares))
-        dct.update({key: counter.summary() for key, counter in self.counters})
         return dct
 
     def log_one_minute(self, address, worker, algo, stamp, typ, amount):

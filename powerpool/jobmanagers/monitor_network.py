@@ -88,10 +88,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         dct = dict(net_state=self.current_net,
                    block_stats=self.block_stats,
                    job_count=len(self.jobs))
-
-        for key, mon in self.auxmons.iteritems():
-            dct[key] = mon.status
-
         dct.update({key: val.summary() for key, val in self.counters.iteritems()})
         return dct
 

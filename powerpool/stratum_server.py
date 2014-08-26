@@ -36,9 +36,12 @@ password_arg_parser.add_argument('-d', '--diff', type=int)
 
 class StratumServer(Component, StreamServer):
     """ A single port binding of our stratum server. """
-
     one_min_stats = ['stratum_connects', 'stratum_disconnects',
-                     'agent_connects', 'agent_disconnects']
+                     'agent_connects', 'agent_disconnects',
+                     'reject_low_share_n1', 'reject_dup_share_n1',
+                     'reject_stale_share_n1', 'acc_share_n1',
+                     'reject_low_share_count', 'reject_dup_share_count',
+                     'reject_stale_share_count', 'acc_share_count']
     defaults = dict(address="0.0.0.0",
                     port=3333,
                     start_difficulty=128,
@@ -89,7 +92,7 @@ class StratumServer(Component, StreamServer):
         self.agent_id_count = 0
 
     def start(self, *args, **kwargs):
-        self.algo_func = self.manager.algos[self.config['algo']]
+        self.algo = self.manager.algos[self.config['algo']]
         self.reporter = self.manager.component_types['Reporter'][0]
         self.jobmanager = self.manager.component_types['Jobmanager'][0]
         self.jobmanager.new_job.rawlink(self.new_job)
@@ -120,7 +123,7 @@ class StratumServer(Component, StreamServer):
             logger=self.logger,
             jobmanager=self.jobmanager,
             manager=self.manager,
-            algo_func=self.algo_func,
+            algo_func=self.algo['module'],
             server=self,
             reporter=self.reporter)
         self._incr('stratum_connects')
@@ -144,10 +147,10 @@ class StratumServer(Component, StreamServer):
     def share_percs(self):
         """ Pretty display of what percentage each reject rate is. Counts
         from beginning of server connection """
-        acc_tot = self.manager['valid'].total or 1
-        low_tot = self.manager['reject_low'].total
-        dup_tot = self.manager['reject_dup'].total
-        stale_tot = self.manager['reject_stale'].total
+        acc_tot = self.counters['acc_share_n1'].total or 1
+        low_tot = self.counters['reject_low_share_n1'].total
+        dup_tot = self.counters['reject_dup_share_n1'].total
+        stale_tot = self.counters['reject_stale_share_n1'].total
         return dict(
             low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
             stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
@@ -158,8 +161,8 @@ class StratumServer(Component, StreamServer):
     def status(self):
         """ For display in the http monitor """
         dct = dict(share_percs=self.share_percs,
-                   mhps=(self.manager.jobmanager.config['hashes_per_share'] *
-                         self.manager['valid'].minute / 1000000 / 60.0),
+                   mhps=(self.algo['hashes_per_share'] *
+                         self.counters['acc_share_n1'].minute / 1000000 / 60.0),
                    agent_client_count=len(self.agent_clients),
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
@@ -167,7 +170,6 @@ class StratumServer(Component, StreamServer):
                    client_count_authed=self.authed_clients,
                    client_count_active=len(self.clients) - self.idle_clients,
                    client_count_idle=self.idle_clients)
-        dct.update({key: val.summary() for key, val in self.counters.iteritems()})
         return dct
 
     def set_user(self, client):
@@ -435,7 +437,7 @@ class StratumClient(GenericClient):
                                     diff=self.difficulty,
                                     typ=self.STALE_SHARE,
                                     params=params)
-            return
+            return self.difficulty, self.STALE_SHARE
 
         # lookup the job in the global job dictionary. If it's gone from here
         # then a new block was announced which wiped it
@@ -447,7 +449,7 @@ class StratumClient(GenericClient):
                                     diff=difficulty,
                                     typ=self.STALE_SHARE,
                                     params=params)
-            return
+            return difficulty, self.STALE_SHARE
 
         # assemble a complete block header bytestring
         header = job.block_header(
@@ -468,7 +470,7 @@ class StratumClient(GenericClient):
                                     typ=self.DUP_SHARE,
                                     params=params,
                                     job=job)
-            return
+            return difficulty, self.DUP_SHARE
 
         job_target = target_from_diff(difficulty, job.diff1)
         hash_int = uint256_from_str(self.algo_func(header))
@@ -481,7 +483,7 @@ class StratumClient(GenericClient):
                                     typ=self.LOW_DIFF_SHARE,
                                     params=params,
                                     job=job)
-            return
+            return difficulty, self.LOW_DIFF_SHARE
 
         # we want to send an ack ASAP, so do it here
         self.send_success(id_val=data['id'])
@@ -495,6 +497,8 @@ class StratumClient(GenericClient):
                                 job=job,
                                 header_hash=hash_int,
                                 header=header)
+
+        return difficulty, self.VALID_SHARE
 
     def recalc_vardiff(self):
         # ideal difficulty is the n1 shares they solved divided by target
@@ -654,7 +658,14 @@ class StratumClient(GenericClient):
                 self.send_error(24, id_val=data['id'])
                 return
 
-            self.submit_job(data)
+            diff, typ = self.submit_job(data)
+            # Log the share to our stat counters
+            key = ""
+            if typ > 0:
+                key += "reject_"
+            key += StratumClient.share_type_strings[typ] + "_share"
+            self._incr(key + "_n1", diff)
+            self._incr(key + "_count")
 
             # don't recalc their diff more often than interval
             if (self.config['vardiff']['enabled'] is True and

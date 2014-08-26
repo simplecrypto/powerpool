@@ -57,11 +57,18 @@ class PowerPool(Component):
                     extranonce_size=4,
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
-                    algorithms=dict(x11="drk_hash.getPoWHash",
-                                    scrypt="ltc_scrypt.getPoWHash",
-                                    scryptn="vtc_scrypt.getPoWHash",
-                                    blake256="blake_hash.getPoWHash",
-                                    sha256="cryptokit.sha256d"))
+                    algorithms=dict(
+                        x11={"module": "drk_hash.getPoWHash",
+                             "hashes_per_share": 4294967296},
+                        scrypt={"module": "ltc_scrypt.getPoWHash",
+                                "hashes_per_share": 65536},
+                        scryptn={"module": "vtc_scrypt.getPoWHash",
+                                 "hashes_per_share": 65536},
+                        blake256={"module": "blake_hash.getPoWHash",
+                                  "hashes_per_share": 65536},
+                        sha256={"module": "cryptokit.sha256d",
+                                "hashes_per_share": 65536}
+                    ))
 
     @classmethod
     def from_raw_config(self, raw_config):
@@ -126,13 +133,16 @@ class PowerPool(Component):
                          .format(self.config['procname']))
 
         # Detect and load all the hash functions we can find
-        for name, module_str in self.config['algorithms'].iteritems():
+        for name, algo_data in self.config['algorithms'].iteritems():
+            self.algos[name] = algo_data.copy()
+            mod = algo_data['module']
             try:
-                self.algos[name] = import_helper(module_str)
+                self.algos[name]['module'] = import_helper(mod)
             except ImportError:
-                continue
-            self.logger.info("Enabling {} hashing algorithm from module {}"
-                             .format(name, module_str))
+                self.algos[name]['module'] = None
+            else:
+                self.logger.info("Enabling {} hashing algorithm from module {}"
+                                 .format(name, mod))
 
         # Setup all our stat managers
         self._min_stat_counters = []
@@ -165,6 +175,7 @@ class PowerPool(Component):
                              .format(self.config['term_timeout']))
             try:
                 for comp in self.components:
+                    self.logger.debug("Calling stop on component {}".format(comp))
                     comp.stop()
                 if gevent.wait(timeout=self.config['term_timeout']):
                     self.logger.info("All threads exited normally")
