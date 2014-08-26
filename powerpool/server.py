@@ -21,7 +21,10 @@ class GenericClient(object):
         except Exception:
             version = False
 
-        if isinstance(version, int):
+        if self.config['valid_address_versions'] and version not in self.config['valid_address_versions']:
+            version = False
+
+        if isinstance(version, int) and version is not False:
             address = username
         else:
             # Filter all except underscores and letters
@@ -33,8 +36,8 @@ class GenericClient(object):
                 address = self.config['aliases'][filtered]
                 self.logger.debug("Setting address alias to {}".format(address))
             else:
-                address = "donate"
-                self.logger.debug("Falling back to donate address {}".format(address))
+                address = self.config['donate_key']
+                self.logger.debug("Falling back to donate key {}".format(address))
         return address, worker
 
     @property

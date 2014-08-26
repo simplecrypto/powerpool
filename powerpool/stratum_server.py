@@ -45,6 +45,8 @@ class StratumServer(Component, StreamServer):
                     algo=REQUIRED,
                     idle_worker_threshold=300,
                     aliases={},
+                    valid_address_versions=[],
+                    donate_key="donate",
                     vardiff=dict(enabled=False,
                                  spm_target=20,
                                  interval=30,
