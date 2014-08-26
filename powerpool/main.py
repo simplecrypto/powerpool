@@ -151,7 +151,6 @@ class PowerPool(Component):
     def start(self):
         for comp in self.components:
             comp.manager = self
-            comp.name = comp.__class__.__name__
             comp.counters = self.register_stat_counters(comp, comp.one_min_stats, comp.one_sec_stats)
             if comp is not self:
                 comp.logger = self.register_logger(comp.__class__.__name__)

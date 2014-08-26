@@ -140,6 +140,10 @@ class Component(object):
     one_sec_stats = []
     dependencies = {}
 
+    @property
+    def name(self):
+        return self.__class__.__name__
+
     def _configure(self, config):
         """ Applies defaults and checks requirements of component configuration
         """

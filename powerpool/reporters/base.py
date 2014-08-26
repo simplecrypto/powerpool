@@ -28,9 +28,9 @@ class Reporter(Component):
                   header=None):
         """ Logs a share to external sources for payout calculation and
         statistics """
-        self.logger.debug("Running log share with args {} kwargs {}"
-                          .format((client.id, diff, typ, params), dict(job=job,
-                                  header_hash=header_hash, header=hexlify(header))))
+        #self.logger.debug("Running log share with args {} kwargs {}"
+        #                  .format((client._id, diff, typ, params), dict(job=job,
+        #                          header_hash=header_hash, header=hexlify(header))))
 
         if typ == StratumClient.VALID_SHARE:
             start = time.time()
