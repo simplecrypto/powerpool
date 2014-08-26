@@ -67,7 +67,7 @@ class CeleryReporter(StatReporter):
         self.queue.put(("agent_receive", args, kwargs))
 
     def add_block(self, address, height, total_subsidy, fees, hex_bits,
-                  hex_hash, currency, algo, merged=False, worker=None):
+                  hex_hash, currency, algo, merged=False, worker=None, **kwargs):
         self._incr('queued')
         # user, height, total_value, transaction_fees, bits, hash_hex, merged=None, worker=None
         kwargs = dict(user=address,
@@ -75,7 +75,7 @@ class CeleryReporter(StatReporter):
                       total_value=total_subsidy,
                       transaction_fees=fees,
                       bits=hex_bits,
-                      hash_hex=hash,
+                      hash_hex=hex_hash,
                       merged=currency if merged else None,
                       worker=worker)
         self.queue.put(("add_block", [], kwargs))
