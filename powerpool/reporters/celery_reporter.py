@@ -63,11 +63,11 @@ class CeleryReporter(StatReporter):
                 self._aggr_shares[address] += diff
 
     def agent_send(self, *args, **kwargs):
-        self.server['queued'].incr()
+        self._incr('queued')
         self.queue.put(("agent_receive", args, kwargs))
 
     def add_block(self, *args, **kwargs):
-        self.server['queued'].incr()
+        self._incr('queued')
         self.queue.put(("add_block", args, kwargs))
 
     @loop()
