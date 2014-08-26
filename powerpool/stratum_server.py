@@ -8,13 +8,13 @@ import time
 
 from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
-from gevent import sleep, with_timeout, spawn
+from gevent import sleep, with_timeout
 from gevent.queue import Queue
 from gevent.pool import Pool
 from gevent.server import StreamServer
 from pprint import pformat
 
-from .agent_server import AgentServer
+from .agent_server import AgentServer, AgentClient
 from .exceptions import LoopExit
 from .server import GenericClient
 from .utils import time_format
@@ -67,12 +67,13 @@ class StratumServer(Component, StreamServer):
 
     def __init__(self, config):
         self._configure(config)
+        self.agent_servers = []
         listener = (self.config['address'], self.config['port'])
 
         # Start a corresponding agent server
         if self.config['agent']['enabled']:
-            serv = AgentServer()
-            self.components[serv.name] = serv
+            serv = AgentServer(self)
+            self.agent_servers.append(serv)
 
         StreamServer.__init__(self, listener, spawn=Pool())
 
@@ -99,6 +100,8 @@ class StratumServer(Component, StreamServer):
 
         self.logger.info("Stratum server starting up on {address}:{port}"
                          .format(**self.config))
+        for serv in self.agent_servers:
+            serv.start()
         StreamServer.start(self, *args, **kwargs)
         Component.start(self)
 
@@ -108,6 +111,8 @@ class StratumServer(Component, StreamServer):
         StreamServer.close(self)
         for client in self.clients.values():
             client.stop()
+        for serv in self.agent_servers:
+            serv.stop()
         Component.stop(self)
 
     def handle(self, sock, address):
@@ -126,8 +131,6 @@ class StratumServer(Component, StreamServer):
             algo_func=self.algo['module'],
             server=self,
             reporter=self.reporter)
-        self._incr('stratum_connects')
-        self.clients[client.id] = client
         client.start()
 
     def new_job(self, event):
@@ -183,39 +186,54 @@ class StratumServer(Component, StreamServer):
         self.address_lut.setdefault(user_worker[0], [])
         self.address_lut[user_worker[0]].append(client)
 
+    def add_client(self, client):
+        if isinstance(client, StratumClient):
+            self._incr('stratum_connects')
+            self.clients[client._id] = client
+        elif isinstance(client, AgentClient):
+            self._incr('agent_connects')
+            self.agent_clients[client._id] = client
+        else:
+            self.logger.warn("Add client got unknown client of type {}"
+                             .format(type(client)))
+
     def remove_client(self, client):
         """ Manages removing the StratumClient from the luts """
-        del self.clients[client.id]
-        address, worker = client.address, client.worker
-        self._incr('stratum_disconnects')
+        if isinstance(client, StratumClient):
+            del self.clients[client._id]
+            address, worker = client.address, client.worker
+            self._incr('stratum_disconnects')
 
-        if client.authenticated:
-            self.authed_clients -= 1
-        if client.idle:
-            self.idle_clients -= 1
+            if client.authenticated:
+                self.authed_clients -= 1
+            if client.idle:
+                self.idle_clients -= 1
 
-        # it won't appear in the luts if these values were never set
-        if address is None and worker is None:
-            return
+            # it won't appear in the luts if these values were never set
+            if address is None and worker is None:
+                return
 
-        # wipe the client from the address tracker
-        if address in self.address_lut:
-            # remove from lut for address
-            self.address_lut[address].remove(client)
-            # if it's the last client in the object, delete the entry
-            if not len(self.address_lut[address]):
-                del self.address_lut[address]
+            # wipe the client from the address tracker
+            if address in self.address_lut:
+                # remove from lut for address
+                self.address_lut[address].remove(client)
+                # if it's the last client in the object, delete the entry
+                if not len(self.address_lut[address]):
+                    del self.address_lut[address]
 
-        # wipe the client from the address/worker tracker
-        key = (address, worker)
-        if key in self.address_worker_lut:
-            self.address_worker_lut[key].remove(client)
-            # if it's the last client in the object, delete the entry
-            if not len(self.address_worker_lut[key]):
-                del self.address_worker_lut[key]
-
-    def _name(self):
-        return "stratum_{}".format(self.config['port'])
+            # wipe the client from the address/worker lut
+            key = (address, worker)
+            if key in self.address_worker_lut:
+                self.address_worker_lut[key].remove(client)
+                # if it's the last client in the object, delete the entry
+                if not len(self.address_worker_lut[key]):
+                    del self.address_worker_lut[key]
+        elif isinstance(client, AgentClient):
+            self._incr('agent_disconnects')
+            del self.agent_clients[client._id]
+        else:
+            self.logger.warn("Remove client got unknown client of type {}"
+                             .format(type(client)))
 
 
 class StratumClient(GenericClient):
@@ -269,7 +287,7 @@ class StratumClient(GenericClient):
         self.address = None
         self.worker = None
         # the worker id. this is also extranonce 1
-        self.id = hexlify(struct.pack('Q', self.server.stratum_id_count))
+        self._id = hexlify(struct.pack('Q', self.server.stratum_id_count))
 
         t = time.time()
         # running total for vardiff
@@ -294,45 +312,11 @@ class StratumClient(GenericClient):
         self.next_diff = self.config['start_difficulty']
         # What time the user connected...
         self.connection_time = int(t)
-        # What time the user connected...
-        self.msg_id = None
 
         # where we put all the messages that need to go out
         self.write_queue = Queue()
         self.fp = None
         self._stopped = False
-
-    def start(self):
-        self.peer_name = self.sock.getpeername()
-        self.fp = self.sock.makefile()
-
-        self._rloop = spawn(self.read)
-        self._wloop = spawn(self.write)
-
-    def stop(self, exit_exc=None, caller=None):
-        if self._stopped:
-            return
-
-        self._stopped = True
-        self._rloop.kill()
-        self._wloop.kill()
-
-        # handle clean disconnection from client
-        try:
-            self.sock.shutdown(socket.SHUT_RDWR)
-        except socket.error:
-            pass
-        try:
-            self.fp.close()
-        except (socket.error, AttributeError):
-            pass
-        try:
-            self.sock.close()
-        except (socket.error, AttributeError):
-            pass
-
-        self.server.remove_client(self)
-        self.logger.info("Closing connection for client {}".format(self.id))
 
     def _incr(self, *args):
         self.server._incr(*args)
@@ -454,13 +438,13 @@ class StratumClient(GenericClient):
         # assemble a complete block header bytestring
         header = job.block_header(
             nonce=params[4],
-            extra1=self.id,
+            extra1=self._id,
             extra2=params[2],
             ntime=params[3])
 
         # Check a submitted share against previous shares to eliminate
         # duplicates
-        share = (self.id, params[2], params[4], params[3])
+        share = (self._id, params[2], params[4], params[3])
         if share in job.acc_shares:
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
@@ -506,7 +490,7 @@ class StratumClient(GenericClient):
         spm_tar = self.config['vardiff']['spm_target']
         ideal_diff = self.reporter.spm(self.address) / spm_tar
         self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
-                          .format(self.id, ideal_diff))
+                          .format(self._id, ideal_diff))
         # find the closest tier for them
         new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
@@ -576,7 +560,7 @@ class StratumClient(GenericClient):
         data.setdefault('params', [])
 
         if __debug__:
-            self.logger.debug("Data {} recieved on client {}".format(data, self.id))
+            self.logger.debug("Data {} recieved on client {}".format(data, self._id))
 
         # run a different function depending on the action requested from
         # user
@@ -597,10 +581,10 @@ class StratumClient(GenericClient):
                     (
                         # These values aren't used for anything, although
                         # perhaps they should be
-                        ("mining.set_difficulty", self.id),
-                        ("mining.notify", self.id)
+                        ("mining.set_difficulty", self._id),
+                        ("mining.notify", self._id)
                     ),
-                    self.id,
+                    self._id,
                     self.manager.config['extranonce_size']
                 ),
                 'error': None,
@@ -681,12 +665,6 @@ class StratumClient(GenericClient):
             self._incr('unk_err')
             self.send_error(id_val=data['id'])
 
-    @loop(fin='stop', exit_exceptions=(socket.error, ))
-    def write(self):
-        for item in self.write_queue:
-            self.fp.write(item)
-            self.fp.flush()
-
     @property
     def summary(self):
         """ Displayed on the all client view in the http status monitor """
@@ -702,7 +680,7 @@ class StratumClient(GenericClient):
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
                     worker=self.worker,
-                    id=self.id,
+                    id=self._id,
                     last_share_submit=str(self.last_share_submit_delta),
                     idle=self.idle,
                     address=self.address,

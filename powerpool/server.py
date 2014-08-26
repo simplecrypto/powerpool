@@ -1,5 +1,9 @@
 from cryptokit.base58 import get_bcaddress_version
+from gevent import spawn
 
+from .lib import loop
+
+import socket
 import datetime
 import re
 
@@ -40,6 +44,39 @@ class GenericClient(object):
                 self.logger.debug("Falling back to donate key {}".format(address))
         return address, worker
 
+    def start(self):
+        self.server.add_client(self)
+        self.peer_name = self.sock.getpeername()
+        self.fp = self.sock.makefile()
+
+        self._rloop = spawn(self.read)
+        self._wloop = spawn(self.write)
+
+    def stop(self, exit_exc=None, caller=None):
+        if self._stopped:
+            return
+
+        self._stopped = True
+        self._rloop.kill()
+        self._wloop.kill()
+
+        # handle clean disconnection from client
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except socket.error:
+            pass
+        try:
+            self.fp.close()
+        except (socket.error, AttributeError):
+            pass
+        try:
+            self.sock.close()
+        except (socket.error, AttributeError):
+            pass
+
+        self.server.remove_client(self)
+        self.logger.info("Closing connection for client {}".format(self._id))
+
     @property
     def connection_duration(self):
         return datetime.datetime.utcnow() - self.connection_time_dt
@@ -47,3 +84,9 @@ class GenericClient(object):
     @property
     def connection_time_dt(self):
         return datetime.datetime.utcfromtimestamp(self.connection_time)
+
+    @loop(fin='stop', exit_exceptions=(socket.error, ))
+    def write(self):
+        for item in self.write_queue:
+            self.fp.write(item)
+            self.fp.flush()
