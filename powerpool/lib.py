@@ -69,7 +69,7 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
             if precise and not interval:
                 raise ValueError("Cannot perform precise timing without an interval")
             if precise is True:
-                precise_val = interval
+                precise_val = interval_val
             else:
                 precise_val = precise
 
