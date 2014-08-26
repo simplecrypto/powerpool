@@ -1,7 +1,9 @@
 import time
 import gevent
 
+from gevent import sleep
 from gevent import spawn, GreenletExit
+from gevent.queue import Queue
 from hashlib import sha256
 from binascii import hexlify
 
@@ -31,8 +33,8 @@ class Reporter(Component):
         """ Logs a share to external sources for payout calculation and
         statistics """
         self.logger.debug("Running log share with args {} kwargs {}"
-                          .format((client, diff, typ, params), dict(job=job,
-                                  header_hash=header_hash, header=header)))
+                          .format((client.id, diff, typ, params), dict(job=job,
+                                  header_hash=header_hash, header=hexlify(header))))
 
         # Log the share to our stat counters
         key = ""
@@ -95,7 +97,7 @@ class StatReporter(Reporter):
     defaults = dict(report_pool_stats=True, pool_worker='', chain=1)
     gl_methods = ['_report_one_min']
 
-    def _setup(self):
+    def __init__(self):
         self._minute_slices = {}
         self._per_address_slices = {}
 
@@ -180,3 +182,49 @@ class StatReporter(Reporter):
                 mins += 1
 
         return total / (mins or 1)  # or 1 prevents divison by zero error
+
+
+class QueueStatReporter(StatReporter):
+    def _start_queue(self):
+        self.queue = Queue()
+
+    @loop(setup='_start_queue')
+    def _queue_proc(self):
+        name, args, kwargs = self.queue.peek()
+        self.logger.debug("Queue running {} with args '{}' kwargs '{}'"
+                          .format(name, args, kwargs))
+        try:
+            func = getattr(self, name, None)
+            if func is None:
+                raise NotImplementedError(
+                    "Item {} has been enqueued that has no valid function!"
+                    .format(name))
+            func(*args, **kwargs)
+        except self.queue_exceptions as e:
+            self.logger.error("Unable to process queue item, retrying! "
+                              "{} Name: {}; Args: {}; Kwargs: {};"
+                              .format(e, name, args, kwargs))
+            sleep(1)
+            return False  # Don't do regular loop sleep
+        except Exception:
+            # Log any unexpected problem, but don't retry because we might
+            # end up endlessly retrying with same failure
+            self.logger.error("Unkown error, queue data discarded!"
+                              "Name: {}; Args: {}; Kwargs: {};"
+                              .format(name, args, kwargs), exc_info=True)
+        # By default we want to remove the item from the queue
+        self.queue.get()
+
+    def log_one_minute(self, *args, **kwargs):
+        self.queue.put(("_queue_log_one_minute", args, kwargs))
+
+    def add_block(self, *args, **kwargs):
+        self.queue.put(("_queue_add_block", args, kwargs))
+
+    def _queue_add_block(self, address, height, total_subsidy, fees, hex_bits,
+                         hex_hash, currency, algo, merged=False, worker=None,
+                         **kwargs):
+        raise NotImplementedError
+
+    def _queue_log_one_minute(self, address, worker, algo, stamp, typ, amount):
+        raise NotImplementedError

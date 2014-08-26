@@ -1,8 +1,7 @@
 import time
 
 from gevent import sleep
-from gevent.queue import Queue
-from . import StatReporter
+from . import QueueStatReporter
 from ..lib import loop
 from ..stratum_server import StratumClient
 
@@ -40,16 +39,15 @@ return idx_map
 """
 
 
-class RedisReporter(StatReporter):
+class RedisReporter(QueueStatReporter):
     one_sec_stats = ['queued']
     gl_methods = ['_queue_proc', '_report_one_min']
-    defaults = StatReporter.defaults.copy()
-    defaults.update(dict(redis={},
-                         chain=1))
+    defaults = QueueStatReporter.defaults.copy()
+    defaults.update(dict(redis={}, chain=1))
 
     def __init__(self, config):
         self._configure(config)
-        super(RedisReporter, self)._setup()
+        super(RedisReporter, self).__init__()
         # Import reporter type specific modules here as to not require them
         # for using powerpool with other reporters
         import redis
@@ -64,13 +62,11 @@ class RedisReporter(StatReporter):
                                  redis.exceptions.ConnectionError)
         self.redis = redis.Redis(**self.config['redis'])
         self.solve_cmd = self.redis.register_script(solve_rotate_multichain)
-        self.queue = Queue()
 
     @property
     def status(self):
         dct = dict(queue_size=self.queue.qsize())
-        dct.update({key: self.manager[key].summary()
-                    for key in self.one_min_stats + self.one_sec_stats})
+        dct.update({key: counter.summary() for key, counter in self.counters})
         return dct
 
     def _queue_log_one_minute(self, address, worker, algo, stamp, typ, amount):
@@ -132,9 +128,6 @@ class RedisReporter(StatReporter):
         # By default we want to remove the item from the queue
         self.queue.get()
 
-    def log_one_minute(self, *args, **kwargs):
-        self.queue.put(("_queue_log_one_minute", args, kwargs))
-
     def log_share(self, client, diff, typ, params, job=None, header_hash=None, header=None):
         super(RedisReporter, self).log_share(
             client, diff, typ, params, job=job, header_hash=header_hash, header=header)
@@ -150,6 +143,3 @@ class RedisReporter(StatReporter):
                                                      algo=job.algo,
                                                      currency=job.currency,
                                                      merged=False)))
-
-    def add_block(self, *args, **kwargs):
-        self.queue.put(("_queue_add_block", args, kwargs))
