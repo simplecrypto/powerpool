@@ -73,11 +73,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                                 last_solve_worker=None)
         self.recent_blocks = deque(maxlen=15)
 
-        if self.config['signal']:
-            self.logger.info("Listening for push block notifs on signal {}"
-                             .format(self.config['signal']))
-            gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
-
         # Run the looping height poller if we aren't getting push notifications
         if (not self.config['signal'] and self.config['poll'] is None) or self.config['poll']:
             self.gl_methods.append('_poll_height')
@@ -93,6 +88,12 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
 
     def start(self):
         Jobmanager.start(self)
+
+        if self.config['signal']:
+            self.logger.info("Listening for push block notifs on signal {}"
+                             .format(self.config['signal']))
+            gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
+
         # Find desired auxmonitors
         self.config['merged'] = set(self.config['merged'])
         found_merged = set()
@@ -104,7 +105,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                 mon.new_job.rawlink(self.new_merged_work)
 
         for monitor in self.config['merged'] - found_merged:
-            self.logger.error("Unable to locate Auxmonitor '{}'".format(monitor))
+            self.logger.error("Unable to locate Auxmonitor(s) '{}'".format(monitor))
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job, start):
         """ Submit a valid block (hopefully!) to the RPC servers """

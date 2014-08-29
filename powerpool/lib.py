@@ -62,6 +62,8 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
     def loop_deco(f):
         @wraps(f)
         def wrapper(self, *args, **kwargs):
+            if kwargs.pop('_single_exec', False):
+                return f(self, *args, **kwargs)
             if isinstance(interval, basestring):
                 interval_val = self.config[interval]
             else:

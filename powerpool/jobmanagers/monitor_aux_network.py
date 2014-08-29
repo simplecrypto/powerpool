@@ -43,10 +43,15 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         self.current_net = dict(difficulty=None, height=None)
         self.recent_blocks = deque(maxlen=15)
 
+    def start(self):
+        super(MonitorAuxNetwork, self).start()
         if self.config['signal']:
             self.logger.info("Listening for push block notifs on signal {}"
                              .format(self.config['signal']))
-            gevent.signal(self.config['signal'], self.update, reason="Signal recieved")
+            gevent.signal(self.config['signal'],
+                          self._check_new_jobs,
+                          reason="Signal recieved",
+                          _single_exec=True)
 
     def found_block(self, address, worker, header, coinbase_raw, job, start):
         aux_data = job.merged_data[self.config['currency']]
