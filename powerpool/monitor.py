@@ -93,10 +93,11 @@ class ServerMonitor(Component, WSGIServer):
     def general(self):
         data = {}
         for comp in self.manager.components:
+            key = "{}_{}".format(comp.__class__.__name__, id(comp))
             try:
-                data[comp.__class__.__name__] = comp.status
+                data[key] = comp.status
             except Exception:
-                data[comp.__class__.__name__] = "Component Error"
+                data[key] = "Component Error"
                 self.logger.error("Component {} raised invalid status"
                                   .format(comp), exc_info=True)
         return jsonify(data)
