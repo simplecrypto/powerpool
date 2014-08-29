@@ -10,7 +10,8 @@ from cryptokit.bitcoin import data as bitcoin_data
 from gevent import sleep
 from gevent.event import Event
 
-from . import RPCException, NodeMonitorMixin, Jobmanager
+from . import NodeMonitorMixin, Jobmanager
+from ..exceptions import RPCException
 from ..lib import loop, REQUIRED
 
 

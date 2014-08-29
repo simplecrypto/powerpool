@@ -15,9 +15,9 @@ from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, spawn
 from gevent.event import Event
 
-from . import RPCException, NodeMonitorMixin, Jobmanager
+from . import NodeMonitorMixin, Jobmanager
 from ..lib import loop, REQUIRED
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, RPCException
 
 
 class MonitorNetwork(Jobmanager, NodeMonitorMixin):
