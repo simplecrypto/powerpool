@@ -46,7 +46,8 @@ class NodeMonitorMixin(object):
 
             self._live_connections.append(conn)
             remlist.append(conn)
-            self.logger.info("Connected to RPC Server {0}. Yay!".format(conn.name))
+            self.logger.info("Now connected to {} RPC Server {}."
+                             .format(self.config['currency'], conn.name))
 
             # if this connection has a higher priority than current
             if self._poll_connection is not None:
@@ -94,6 +95,7 @@ class NodeMonitorMixin(object):
             self._down_connections.append(conn)
 
     def call_rpc(self, command, *args, **kwargs):
+        self._connected.wait()
         try:
             return getattr(self._poll_connection, command)(*args, **kwargs)
         except (urllib3.exceptions.HTTPError, CoinRPCException) as e:

@@ -15,7 +15,7 @@ from cryptokit.base58 import get_bcaddress_version
 from gevent import sleep, spawn
 from gevent.event import Event
 
-from . import MonitorAuxNetwork, RPCException, NodeMonitorMixin, Jobmanager
+from . import RPCException, NodeMonitorMixin, Jobmanager
 from ..lib import loop, REQUIRED
 from ..exceptions import ConfigurationError
 
@@ -98,9 +98,10 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         found_merged = set()
 
         for mon in self.manager.component_types['Jobmanager']:
-            if mon.key in self.config['merged']:
+            if mon.config.get('currency') in self.config['merged']:
                 self.auxmons.append(mon)
                 found_merged.add(mon.key)
+                mon.new_job.rawlink(self.new_merged_work)
 
         for monitor in self.config['merged'] - found_merged:
             self.logger.error("Unable to locate Auxmonitor '{}'".format(monitor))
@@ -212,7 +213,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
 
     @loop(interval='block_poll')
     def _poll_height(self):
-        self._connected.wait()
         try:
             height = self.call_rpc('getblockcount')
         except RPCException:
@@ -225,7 +225,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
 
     @loop(interval='job_refresh')
     def _check_new_jobs(self):
-        self._connected.wait()
         self.getblocktemplate()
 
     def getblocktemplate(self, new_block=False, signal=False):
@@ -265,6 +264,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             # network
             self.generate_job(push=new_block, flush=new_block, new_block=new_block)
 
+    def new_merged_work(self, event):
+        self.generate_job(push=True, flush=event.flush)
+
     def generate_job(self, push=False, flush=False, new_block=False):
         """ Creates a new job for miners to work on. Push will trigger an
         event that sends new work but doesn't force a restart. If flush is
@@ -279,6 +281,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             merged_work = {}
             auxdata = {}
             for auxmon in self.auxmons:
+                if auxmon.last_work['hash'] is None:
+                    continue
                 merged_work[auxmon.last_work['chainid']] = dict(
                     hash=auxmon.last_work['hash'],
                     target=auxmon.last_work['type']
@@ -295,9 +299,12 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             ))
 
             for auxmon in self.auxmons:
+                if auxmon.last_work['hash'] is None:
+                    continue
                 data = dict(target=auxmon.last_work['target'],
                             hash=auxmon.last_work['hash'],
                             height=auxmon.last_work['height'],
+                            found_block=auxmon.found_block,
                             index=mm_hashes.index(auxmon.last_work['hash']),
                             type=auxmon.last_work['type'],
                             hashes=mm_hashes)

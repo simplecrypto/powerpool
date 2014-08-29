@@ -107,27 +107,6 @@ class RedisReporter(QueueStatReporter):
         self.redis.hincrbyfloat(block_key, chain_key, shares)
         self.redis.rpush(chain_slice, user_shares)
 
-    @loop()
-    def _queue_proc(self):
-        name, args, kwargs = self.queue.peek()
-        self.logger.debug("Queue running {} with args '{}' kwargs '{}'"
-                          .format(name, args, kwargs))
-        try:
-            getattr(self, name)(*args, **kwargs)
-        except self.queue_exceptions as e:
-            self.logger.error("Unable to communicate with Redis! "
-                              "{} Name: {}; Args: {}; Kwargs: {};"
-                              .format(e, name, args, kwargs))
-            sleep(1)
-            return
-        except Exception:
-            # Log any unexpected problem, but don't retry because we might
-            # end up endlessly retrying with same failure
-            self.logger.error("Unkown error! Name: {}; Args: {}; Kwargs: {};"
-                              .format(name, args, kwargs), exc_info=True)
-        # By default we want to remove the item from the queue
-        self.queue.get()
-
     def log_share(self, client, diff, typ, params, job=None, header_hash=None, header=None):
         super(RedisReporter, self).log_share(
             client, diff, typ, params, job=job, header_hash=header_hash, header=header)

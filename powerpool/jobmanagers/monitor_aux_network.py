@@ -1,14 +1,13 @@
-import urllib3
 import gevent
 import socket
 import time
 import datetime
 
-from cryptokit.rpc import CoinserverRPC, CoinRPCException
+from cryptokit.rpc import CoinRPCException
 from collections import deque
 from cryptokit.util import pack
 from cryptokit.bitcoin import data as bitcoin_data
-from gevent import sleep, Greenlet
+from gevent import sleep
 from gevent.event import Event
 
 from . import RPCException, NodeMonitorMixin, Jobmanager
@@ -22,8 +21,10 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
     defaults = dict(enabled=False,
                     work_interval=1,
                     signal=None,
+                    rpc_ping_int=2,
+                    algo=REQUIRED,
                     currency=REQUIRED,
-                    coinserv=REQUIRED,
+                    coinservs=REQUIRED,
                     flush=False,
                     send=True)
 
@@ -72,7 +73,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
             new_height = aux_data['height'] + 1
             res = False
             try:
-                res = self.coinserv.getauxblock(*aux_block)
+                res = self.call_rpc('getauxblock', *aux_block)
             except (CoinRPCException, socket.error, ValueError) as e:
                 self.logger.error("{} Aux block failed to submit to the server!"
                                   .format(self.config['currency']), exc_info=True)
@@ -93,16 +94,16 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                     # reporting the new block. Pretty failsafe so at least
                     # partial information will be reporter regardless
                     try:
-                        hsh = self.coinserv.getblockhash(new_height)
+                        hsh = self.call_rpc('getblockhash', new_height)
                     except Exception:
                         self.logger.info("", exc_info=True)
                         hsh = ''
                     try:
-                        block = self.coinserv.getblock(hsh)
+                        block = self.call_rpc('getblock', hsh)
                     except Exception:
                         self.logger.info("", exc_info=True)
                     try:
-                        trans = self.coinserv.gettransaction(block['tx'][0])
+                        trans = self.call_rpc('gettransaction', block['tx'][0])
                         amount = trans['details'][0]['amount']
                     except Exception:
                         self.logger.info("", exc_info=True)
@@ -114,8 +115,9 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                                 total_subsidy=int(amount * 100000000),
                                 fees=-1,
                                 hex_bits="%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
-                                hash=hsh,
-                                merged=self.config['currency'],
+                                hex_hash=hsh,
+                                currency=self.config['currency'],
+                                merged=True,
                                 algo=self.config['algo'],
                                 worker=worker)
 
@@ -146,7 +148,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
             return False
 
         hash = int(auxblock['hash'], 16)
-        if auxblock['hash'] != self.last_work['hash']:
+        if hash != self.last_work['hash']:
             # We fetch the block height so we can see if the hash changed
             # because of a new network block, or because new transactions
             try:
@@ -168,13 +170,14 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
             # only push the job if there's a new block height discovered.
             if self.current_net['height'] != height:
                 self.current_net['height'] = height
-                self.jobmanager.generate_job(push=True, flush=self.config['flush'])
                 self._incr("work_restarts")
                 self._incr("new_jobs")
+                self.new_job.flush = self.config['flush']
             else:
-                self.new_job.set()
-                self.new_job.clear()
                 self._incr("new_jobs")
+                self.new_job.flush = False
+            self.new_job.set()
+            self.new_job.clear()
 
             self.current_net['difficulty'] = bitcoin_data.target_to_difficulty(target_int)
             self.logger.info("New aux work announced! Diff {:,.4f}. Height {:,}"
