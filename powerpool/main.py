@@ -135,6 +135,7 @@ class PowerPool(Component):
         # Detect and load all the hash functions we can find
         for name, algo_data in self.config['algorithms'].iteritems():
             self.algos[name] = algo_data.copy()
+            self.algos[name]['name'] = name
             mod = algo_data['module']
             try:
                 self.algos[name]['module'] = import_helper(mod)

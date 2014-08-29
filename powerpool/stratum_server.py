@@ -128,7 +128,7 @@ class StratumServer(Component, StreamServer):
             logger=self.logger,
             jobmanager=self.jobmanager,
             manager=self.manager,
-            algo_func=self.algo['module'],
+            algo=self.algo,
             server=self,
             reporter=self.reporter)
         client.start()
@@ -265,11 +265,11 @@ class StratumClient(GenericClient):
     share_type_strings = {0: "acc", 1: "dup", 2: "low", 3: "stale"}
 
     def __init__(self, sock, address, logger, manager, jobmanager, server,
-                 reporter, algo_func, config):
+                 reporter, algo, config):
         self.config = config
         self.jobmanager = jobmanager
         self.manager = manager
-        self.algo_func = algo_func
+        self.algo = algo
         self.server = server
         self.reporter = reporter
         self.logger = logger
@@ -460,7 +460,7 @@ class StratumClient(GenericClient):
             return difficulty, self.DUP_SHARE
 
         job_target = target_from_diff(difficulty, job.diff1)
-        hash_int = uint256_from_str(self.algo_func(header))
+        hash_int = uint256_from_str(self.algo['module'](header))
         if hash_int >= job_target:
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))

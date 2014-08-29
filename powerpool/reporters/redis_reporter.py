@@ -111,6 +111,9 @@ class RedisReporter(QueueStatReporter):
         super(RedisReporter, self).log_share(
             client, diff, typ, params, job=job, header_hash=header_hash, header=header)
 
+        if typ != StratumClient.VALID_SHARE:
+            return
+
         for currency in job.merged_data:
             self.queue.put(("_queue_log_share", [], dict(address=client.address,
                                                          shares=diff,

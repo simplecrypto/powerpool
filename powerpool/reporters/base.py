@@ -100,7 +100,7 @@ class StatReporter(Reporter):
         super(StatReporter, self).log_share(
             client, diff, typ, params, job=job, header_hash=header_hash, header=header)
         address, worker = client.address, client.worker
-        algo = job.algo
+        algo = client.algo['name']
         slc_time = (int(time.time()) // 60) * 60
         slc = self._minute_slices.setdefault(slc_time, {})
         # log the share under user "pool" to allow easy/fast display of pool stats
