@@ -80,11 +80,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
     @property
     def status(self):
         """ For display in the http monitor """
-        dct = dict(net_state=self.current_net,
-                   block_stats=self.block_stats,
-                   job_count=len(self.jobs))
-        dct.update({key: val.summary() for key, val in self.counters.iteritems()})
-        return dct
+        return dict(net_state=self.current_net,
+                    block_stats=self.block_stats,
+                    job_count=len(self.jobs))
 
     def start(self):
         Jobmanager.start(self)
