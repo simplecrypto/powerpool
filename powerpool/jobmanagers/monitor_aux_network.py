@@ -193,9 +193,5 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
 
     @property
     def status(self):
-        dct = dict(block_stats=self.block_stats,
-                   current_net=self.current_net)
-        chop = len(self.prefix)
-        dct.update({key[chop:]: self.server[key].summary()
-                    for key in self.one_min_stats})
-        return dct
+        return dict(block_stats=self.block_stats,
+                    current_net=self.current_net)
