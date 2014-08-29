@@ -245,12 +245,14 @@ class PowerPool(Component):
         for key in min_counters:
             new = MinuteStatManager()
             new.owner = comp
+            new.key = key
             counters[key] = new
             self._min_stat_counters.append(new)
 
         for key in sec_counters or []:
             new = SecondStatManager()
             new.owner = comp
+            new.key = key
             counters[key] = new
             self._sec_stat_counters.append(new)
 

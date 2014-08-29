@@ -49,6 +49,7 @@ class ServerMonitor(Component, WSGIServer):
         app.config.update(self.config)
         app.add_url_rule('/', 'general', self.general)
         app.add_url_rule('/debug', 'debug', self.debug)
+        app.add_url_rule('/counters', 'counters', self.counters)
         app.add_url_rule('/client/<address>', 'client', self.client)
         app.add_url_rule('/ip/<address>', 'ip_lookup', self.ip_lookup)
         app.add_url_rule('/viewer/', 'viewer', self.viewer)
@@ -121,6 +122,12 @@ class ServerMonitor(Component, WSGIServer):
         if not filename:
             filename = "index.html"
         return send_from_directory(self.viewer_dir, filename)
+
+    def counters(self):
+        counters = []
+        counters.extend(c.summary() for c in self.manager._min_stat_counters)
+        counters.extend(c.summary() for c in self.manager._sec_stat_counters)
+        return jsonify(counters=counters)
 
     def clients_0_5(self):
         """ Legacy client view emulating version 0.5 support """

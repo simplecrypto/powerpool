@@ -254,7 +254,9 @@ class SecondStatManager(object):
         return sum(self.mins) / 60.0
 
     def summary(self):
-        return dict(total=self.total,
+        return dict(name=self.key,
+                    owner=str(self.owner),
+                    total=self.total,
                     min_total=self.minute,
                     hour_total=self.hour,
                     min_avg=self.min_avg)
