@@ -163,9 +163,12 @@ class StratumServer(Component, StreamServer):
     @property
     def status(self):
         """ For display in the http monitor """
+        hps = (self.algo['hashes_per_share'] *
+               self.counters['acc_share_n1'].minute /
+               60.0)
         dct = dict(share_percs=self.share_percs,
-                   mhps=(self.algo['hashes_per_share'] *
-                         self.counters['acc_share_n1'].minute / 1000000 / 60.0),
+                   mhps=hps / 1000000.0,
+                   hps=hps,
                    agent_client_count=len(self.agent_clients),
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
