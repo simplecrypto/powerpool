@@ -65,9 +65,7 @@ class RedisReporter(QueueStatReporter):
 
     @property
     def status(self):
-        dct = dict(queue_size=self.queue.qsize())
-        dct.update({key: counter.summary() for key, counter in self.counters})
-        return dct
+        return dict(queue_size=self.queue.qsize())
 
     def _queue_log_one_minute(self, address, worker, algo, stamp, typ, amount):
         # Include worker info if defined
