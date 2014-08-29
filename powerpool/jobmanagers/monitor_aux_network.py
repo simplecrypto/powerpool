@@ -34,6 +34,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         NodeMonitorMixin.__init__(self)
 
         self.new_job = Event()
+        self.last_signal = 0.0
         self.last_work = {'hash': None}
         self.block_stats = dict(accepts=0,
                                 rejects=0,
@@ -41,7 +42,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                                 last_solve_height=None,
                                 last_solve_time=None,
                                 last_solve_worker=None)
-        self.current_net = dict(difficulty=None, height=None)
+        self.current_net = dict(difficulty=None, height=None, last_block=0.0)
         self.recent_blocks = deque(maxlen=15)
 
     def start(self):
@@ -51,7 +52,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                              .format(self.config['signal']))
             gevent.signal(self.config['signal'],
                           self._check_new_jobs,
-                          reason="Signal recieved",
+                          signal=True,
                           _single_exec=True)
 
     def found_block(self, address, worker, header, coinbase_raw, job, start):
@@ -142,8 +143,9 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         self.block_stats['last_solve_time'] = datetime.datetime.utcnow()
 
     @loop(interval='work_interval')
-    def _check_new_jobs(self, reason=None):
-        if reason:
+    def _check_new_jobs(self, signal=False):
+        if signal:
+            self.last_signal = time.time()
             self.logger.info("Updating {} aux work from a signal recieved!"
                              .format(self.config['currency']))
 
@@ -174,24 +176,30 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
             ))
 
             # only push the job if there's a new block height discovered.
+            new_block = False
             if self.current_net['height'] != height:
                 self.current_net['height'] = height
                 self._incr("work_restarts")
                 self._incr("new_jobs")
                 self.new_job.flush = self.config['flush']
+                new_block = True
             else:
                 self._incr("new_jobs")
                 self.new_job.flush = False
             self.new_job.set()
             self.new_job.clear()
 
-            self.current_net['difficulty'] = bitcoin_data.target_to_difficulty(target_int)
-            self.logger.info("New aux work announced! Diff {:,.4f}. Height {:,}"
-                             .format(self.current_net['difficulty'], height))
+            if new_block:
+                self.current_net['last_block'] = time.time()
+                self.current_net['difficulty'] = bitcoin_data.target_to_difficulty(target_int)
+                self.logger.info("New aux block announced! Diff {:,.4f}. Height {:,}"
+                                 .format(self.current_net['difficulty'], height))
 
         return True
 
     @property
     def status(self):
         return dict(block_stats=self.block_stats,
+                    currency=self.currency,
+                    last_signal=self.last_signal,
                     current_net=self.current_net)

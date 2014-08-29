@@ -58,10 +58,12 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         self.jobs = {}
         self.latest_job = None  # The last job that was generated
         self.new_job = Event()
+        self.last_signal = 0.0
 
         # general current network stats
         self.current_net = dict(difficulty=None,
                                 height=None,
+                                last_block=0.0,
                                 prev_hash=None,
                                 transactions=None,
                                 subsidy=None)
@@ -227,6 +229,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         self.getblocktemplate()
 
     def getblocktemplate(self, new_block=False, signal=False):
+        if signal:
+            self.last_signal = time.time()
         try:
             # request local memory pool and load it in
             bt = self.call_rpc('getblocktemplate',
@@ -390,6 +394,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.current_net['difficulty'] = bits_to_difficulty(hex_bits)
             self.current_net['subsidy'] = bt_obj.total_value
             self.current_net['height'] = bt_obj.block_height - 1
+            self.current_net['last_block'] = time.time()
             self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
             self.current_net['transactions'] = len(bt_obj.transactions)
         self._incr('new_jobs')
