@@ -132,7 +132,8 @@ class ServerMonitor(Component, WSGIServer):
 
     def general_0_5(self):
         """ Legacy 0.5 emulating view """
-        return jsonify(stratum_manager=self.manager.component_types['StratumServer'][0].status)
+        return jsonify(server={},
+                       stratum_manager=self.manager.component_types['StratumServer'][0].status)
 
 
 def jsonize(item):
