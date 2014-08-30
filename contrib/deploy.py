@@ -41,11 +41,13 @@ def try_pip(pip_fragment):
     req(pip_inst)
 
 if args.action == "create":
+    req(r'echo "__sha__ = \"{}\"\n" >> powerpool/__init__.py'.format(githash))
     req("virtualenv {}".format(basedir))
     req("{}/bin/pip install wheel".format(basedir))
     try_pip("-r requirements.txt")
     try_pip("vtc_scrypt ltc_scrypt drk_hash")
-    req("{}/bin/pip install -e .".format(basedir))
+    req("{}/bin/pip install .".format(basedir))
+    req("git checkout -- powerpool/__init__.py")
     print "\n#### SUCCESS ####\n"
 
 elif args.action == "link":
