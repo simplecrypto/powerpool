@@ -52,4 +52,4 @@ if args.action == "create":
 
 elif args.action == "link":
     for name in args.names:
-        req("ln -fs {}/bin/pp {}".format(basedir, name))
+        req("ln -fs {}/bin/pp {}".format(githash, name))
