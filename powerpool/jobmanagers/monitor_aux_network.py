@@ -200,6 +200,6 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
     @property
     def status(self):
         return dict(block_stats=self.block_stats,
-                    currency=self.currency,
+                    currency=self.config['currency'],
                     last_signal=self.last_signal,
                     current_net=self.current_net)

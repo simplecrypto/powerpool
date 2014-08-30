@@ -84,6 +84,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         """ For display in the http monitor """
         return dict(net_state=self.current_net,
                     block_stats=self.block_stats,
+                    currency=self.config['currency'],
                     job_count=len(self.jobs))
 
     def start(self):
