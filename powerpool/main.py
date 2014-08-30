@@ -165,7 +165,7 @@ class PowerPool(Component):
         ######
         # Register shutdown signals
         gevent.signal(signal.SIGINT, exit, "SIGINT")
-        gevent.signal(signal.SIGHUP, exit, "SIGHUP")
+        gevent.signal(signal.SIGTERM, exit, "SIGTERM")
 
         try:
             gevent.wait()
