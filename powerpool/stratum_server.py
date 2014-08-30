@@ -290,7 +290,13 @@ class StratumClient(GenericClient):
         self.address = None
         self.worker = None
         # the worker id. this is also extranonce 1
-        self._id = hexlify(struct.pack('Q', self.server.stratum_id_count))
+        id = self.server.stratum_id_count
+        if self.manager.config['extranonce_serv_size'] == 8:
+            self._id = hexlify(struct.pack('Q', id))
+        elif self.manager.config['extranonce_serv_size'] == 4:
+            self._id = hexlify(struct.pack('I', id))
+        else:
+            raise Exception("Unsupported extranonce size!")
 
         t = time.time()
         # running total for vardiff

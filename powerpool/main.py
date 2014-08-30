@@ -53,7 +53,7 @@ class PowerPool(Component):
     gl_methods = ['_tick_stats']
     defaults = dict(procname="powerpool",
                     term_timeout=10,
-                    extranone_serv_size=4,
+                    extranonce_serv_size=4,
                     extranonce_size=4,
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],

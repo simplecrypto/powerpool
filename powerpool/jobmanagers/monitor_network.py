@@ -23,8 +23,6 @@ from ..exceptions import ConfigurationError, RPCException
 class MonitorNetwork(Jobmanager, NodeMonitorMixin):
     one_min_stats = ['work_restarts', 'new_jobs', 'work_pushes']
     defaults = config = dict(coinservs=REQUIRED,
-                             extranonce_serv_size=8,
-                             extranonce_size=4,
                              diff1=0x0000FFFF00000000000000000000000000000000000000000000000000000000,
                              hashes_per_share=0xFFFF,
                              merged=tuple(),
@@ -332,8 +330,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         coinbase.version = 2
         # create a coinbase input with encoded height and padding for the
         # extranonces so script length is accurate
-        extranonce_length = (self.config['extranonce_size'] +
-                             self.config['extranonce_serv_size'])
+        extranonce_length = (self.manager.config['extranonce_size'] +
+                             self.manager.config['extranonce_serv_size'])
         coinbase.inputs.append(
             Input.coinbase(self._last_gbt['height'],
                            addtl_push=[mm_data] if mm_data else [],
