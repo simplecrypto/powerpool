@@ -41,7 +41,7 @@ def try_pip(pip_fragment):
     req(pip_inst)
 
 if args.action == "create":
-    req(r'echo "__sha__ = \"{}\"\n" >> powerpool/__init__.py'.format(githash))
+    req(r'echo "__sha__ = \"{}\"" >> powerpool/__init__.py'.format(githash))
     req("virtualenv {}".format(basedir))
     req("{}/bin/pip install wheel".format(basedir))
     try_pip("-r requirements.txt")
