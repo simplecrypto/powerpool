@@ -74,7 +74,12 @@ class Reporter(Component):
                         start))
 
             for gl in gevent.iwait(submission_threads):
-                spawn(self.add_block, **gl.value)
+                ret = gl.value
+                if ret:
+                    spawn(self.add_block, **gl.value)
+                else:
+                    self.logger.error("Submission gl {} returned nothing!"
+                                      .format(gl))
 
 
 class StatReporter(Reporter):
