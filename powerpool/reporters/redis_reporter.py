@@ -123,3 +123,6 @@ class RedisReporter(QueueStatReporter):
                                                      algo=job.algo,
                                                      currency=job.currency,
                                                      merged=False)))
+
+    def agent_send(self, *args, **kwargs):
+        pass
