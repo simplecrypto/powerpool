@@ -45,11 +45,11 @@ if args.action == "create":
     req("virtualenv {}".format(basedir))
     req("{}/bin/pip install wheel".format(basedir))
     try_pip("-r requirements.txt")
-    try_pip("vtc_scrypt ltc_scrypt drk_hash")
+    try_pip("-r ../extra-requirements.txt")
     req("{}/bin/pip install .".format(basedir))
     req("git checkout -- powerpool/__init__.py")
     print "\n#### SUCCESS ####\n"
 
 elif args.action == "link":
     for name in args.names:
-        req("ln -f {}/bin/pp {}".format(basedir, name))
+        req("ln -fs {}/bin/pp {}".format(basedir, name))
