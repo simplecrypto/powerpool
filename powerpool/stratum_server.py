@@ -18,6 +18,7 @@ from .agent_server import AgentServer, AgentClient
 from .exceptions import LoopExit
 from .server import GenericClient
 from .utils import time_format
+from .exceptions import ConfigurationError
 from .lib import Component, loop, REQUIRED
 
 
@@ -45,6 +46,8 @@ class StratumServer(Component, StreamServer):
     defaults = dict(address="0.0.0.0",
                     port=3333,
                     start_difficulty=128,
+                    reporter=None,
+                    jobmanager=None,
                     algo=REQUIRED,
                     idle_worker_threshold=300,
                     aliases={},
@@ -94,8 +97,23 @@ class StratumServer(Component, StreamServer):
 
     def start(self, *args, **kwargs):
         self.algo = self.manager.algos[self.config['algo']]
-        self.reporter = self.manager.component_types['Reporter'][0]
-        self.jobmanager = self.manager.component_types['Jobmanager'][0]
+        if not self.config['reporter'] and len(self.manager.component_types['Reporter']) == 1:
+            self.reporter = self.manager.component_types['Reporter'][0]
+        elif not self.config['reporter']:
+            raise ConfigurationError(
+                "There are more than one Reporter components, target reporter"
+                "must be specified explicitly!")
+        else:
+            self.reporter = self._lookup(self.config['reporter'])
+
+        if not self.config['jobmanager'] and len(self.manager.component_types['Jobmanager']) == 1:
+            self.jobmanager = self.manager.component_types['Jobmanager'][0]
+        elif not self.config['jobmanager']:
+            raise ConfigurationError(
+                "There are more than one Jobmanager components, target jobmanager "
+                "must be specified explicitly!")
+        else:
+            self.jobmanager = self._lookup(self.config['jobmanager'])
         self.jobmanager.new_job.rawlink(self.new_job)
 
         self.logger.info("Stratum server starting up on {address}:{port}"

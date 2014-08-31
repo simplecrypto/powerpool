@@ -72,19 +72,20 @@ class PowerPool(Component):
 
     @classmethod
     def from_raw_config(self, raw_config):
-        components = []
+        components = {}
         types = [PowerPool, Reporter, Jobmanager, StratumServer]
         component_types = {cls.__name__: [] for cls in types}
         component_types['other'] = []
-        for item in raw_config:
+        for key, item in raw_config.iteritems():
             obj = import_helper(item['type'])(item)
+            obj.key = key
             for typ in types:
                 if isinstance(obj, typ):
                     component_types[typ.__name__].append(obj)
                     break
             else:
                 component_types['other'].append(obj)
-            components.append(obj)
+            components[key] = obj
 
         pp = component_types['PowerPool'][0]
         assert len(component_types['PowerPool']) == 1
@@ -150,11 +151,11 @@ class PowerPool(Component):
         self._sec_stat_counters = []
 
     def start(self):
-        for comp in self.components:
+        for comp in self.components.itervalues():
             comp.manager = self
             comp.counters = self.register_stat_counters(comp, comp.one_min_stats, comp.one_sec_stats)
             if comp is not self:
-                comp.logger = self.register_logger(comp.__class__.__name__)
+                comp.logger = self.register_logger(comp.name)
                 comp.start()
 
         # Starts the greenlet
@@ -174,7 +175,7 @@ class PowerPool(Component):
             self.logger.info("Exiting requested, allowing {} seconds for cleanup."
                              .format(self.config['term_timeout']))
             try:
-                for comp in self.components:
+                for comp in self.components.itervalues():
                     self.logger.debug("Calling stop on component {}".format(comp))
                     comp.stop()
                 if gevent.wait(timeout=self.config['term_timeout']):

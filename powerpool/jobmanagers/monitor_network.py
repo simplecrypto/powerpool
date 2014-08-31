@@ -98,7 +98,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         found_merged = set()
 
         for mon in self.manager.component_types['Jobmanager']:
-            if mon.config.get('currency') in self.config['merged']:
+            if mon.key in self.config['merged']:
                 self.auxmons.append(mon)
                 found_merged.add(mon.key)
                 mon.new_job.rawlink(self.new_merged_work)

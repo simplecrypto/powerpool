@@ -1,7 +1,7 @@
 import time
 import gevent
 
-from gevent import spawn, GreenletExit
+from gevent import spawn
 from hashlib import sha256
 from binascii import hexlify
 
@@ -22,7 +22,7 @@ class DoubleReporter(Reporter):
     def start(self):
         Reporter.start(self)
         for rep in self.manager.component_types['Reporter']:
-            if rep.config.get('name') in self.config['reporters']:
+            if rep.key in self.config['reporters']:
                 self.child_reporters.append(rep)
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,

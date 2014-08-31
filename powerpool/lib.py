@@ -144,7 +144,7 @@ class Component(object):
 
     @property
     def name(self):
-        return self.__class__.__name__
+        return "{}_{}".format(self.__class__.__name__, self.key)
 
     def _configure(self, config):
         """ Applies defaults and checks requirements of component configuration
@@ -206,6 +206,13 @@ class Component(object):
 
     def _incr(self, counter, amount=1):
         self.counters[counter].incr(amount)
+
+    def _lookup(self, key):
+        try:
+            return self.manager.components[key]
+        except KeyError:
+            raise ConfigurationError("Cannot find component {}"
+                                     .format(self.config['reporter']))
 
 
 class SecondStatManager(object):
