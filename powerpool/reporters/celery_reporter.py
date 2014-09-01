@@ -84,8 +84,9 @@ class CeleryReporter(StatReporter):
     def _queue_proc(self):
             name, args, kwargs = self.queue.peek()
             try:
-                self.logger.info("Calling celery task {} with args: {}, kwargs: {}"
-                                 .format(name, args, kwargs))
+                if name != "agent_receive":
+                    self.logger.info("Calling celery task {} with args: {}, kwargs: {}"
+                                     .format(name, args, kwargs))
                 self.celery.send_task(
                     self.config['celery_task_prefix'] + '.' + name, args, kwargs)
             except Exception as e:
