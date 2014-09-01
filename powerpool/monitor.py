@@ -93,7 +93,7 @@ class ServerMonitor(Component, WSGIServer):
 
     def general(self):
         data = {}
-        for comp in self.manager.components:
+        for comp in self.manager.components.itervalues():
             key = "{}_{}".format(comp.__class__.__name__, id(comp))
             try:
                 data[key] = comp.status
