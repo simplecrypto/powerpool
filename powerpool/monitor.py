@@ -51,7 +51,8 @@ class ServerMonitor(Component, WSGIServer):
         app.add_url_rule('/debug', 'debug', self.debug)
         app.add_url_rule('/counters', 'counters', self.counters)
         app.add_url_rule('/client/<address>', 'client', self.client)
-        app.add_url_rule('/ip/<address>', 'ip_lookup', self.ip_lookup)
+        app.add_url_rule('/<comp_key>/clients', 'serv_clients_comp', self.clients_comp)
+        app.add_url_rule('/<comp_key>/', 'component', self.comp)
         app.add_url_rule('/viewer/', 'viewer', self.viewer)
         app.add_url_rule('/viewer/<path:filename>', 'viewer_sub', self.viewer)
         # Legacy
@@ -103,21 +104,25 @@ class ServerMonitor(Component, WSGIServer):
         return jsonify(data)
 
     def client(self, address):
+        clients = []
+        for server in self.manager.component_types['StratumServer']:
+            clients.extend(server.address_lut.get(address, []))
+
+        return jsonify(**{address: [client.details for client in clients]})
+
+    def comp(self, comp_key):
+        return jsonify(**self.manager.components[comp_key].status)
+
+    def clients_comp(self, comp_key):
         try:
-            clients = self.manager.component_types['StratumServer'][0].address_lut[address]
+            lut = self.manager.components[comp_key].address_lut
         except KeyError:
             abort(404)
 
-        reporter = self.manager.component_types['Reporter'][0]
-        return jsonify(**{address: [getattr(reporter.addresses.get(address), 'status', None)] +
-                          [client.details for client in clients]})
+        clients = {key: [item.summary for item in value]
+                   for key, value in lut.iteritems()}
 
-    def ip_lookup(self, address):
-        clients = self.manager.component_types['StratumServer'][0].clients
-        clients = [client.details for client in clients.itervalues()
-                   if getattr(client, 'peer_name', [False])[0] == address]
-
-        return jsonify(**{address: clients})
+        return jsonify(clients=clients)
 
     def viewer(self, filename=None):
         if not filename:
