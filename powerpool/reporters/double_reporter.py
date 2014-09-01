@@ -6,6 +6,7 @@ from hashlib import sha256
 from binascii import hexlify
 
 from ..stratum_server import StratumClient
+from ..exceptions import ConfigurationError
 from . import Reporter
 
 
@@ -21,9 +22,14 @@ class DoubleReporter(Reporter):
 
     def start(self):
         Reporter.start(self)
-        for rep in self.manager.component_types['Reporter']:
-            if rep.key in self.config['reporters']:
-                self.child_reporters.append(rep)
+        for key in self.config['reporters']:
+            if key in self.manager.components:
+                self.child_reporters.append(self.manager.components[key])
+            else:
+                raise ConfigurationError("Couldn't find {}".format(key))
+
+        if not self.child_reporters:
+            raise ConfigurationError("Must have at least one reporter!")
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,
                   header=None):
@@ -71,7 +77,7 @@ class DoubleReporter(Reporter):
             for gl in gevent.iwait(submission_threads):
                 ret = gl.value
                 if ret:
-                    spawn(self.add_block, **gl.value)
+                    spawn(self.add_block, **ret)
                 else:
                     self.logger.error("Submission gl {} returned nothing!"
                                       .format(gl))
