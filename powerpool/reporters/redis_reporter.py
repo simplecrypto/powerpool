@@ -126,10 +126,11 @@ class RedisReporter(QueueStatReporter):
                                                      merged=False)))
 
     def _queue_agent_send(self, address, worker, typ, data, stamp):
-        print "runnings {}".format((address, worker, typ, data, stamp))
         if typ == "hashrate" or typ == "temp":
-            address += "." + worker
-            self.redis.hset("{}_{}".format(typ, stamp), address, data)
+            for did, val in enumerate(data):
+                self.redis.hset("{}_{}".format(typ, stamp),
+                                "{}_{}_{}".format(address, worker, did),
+                                val)
         elif typ == "status":
             self.redis.set("status_{}_{}".format(address, worker), json.dumps(data))
         else:
