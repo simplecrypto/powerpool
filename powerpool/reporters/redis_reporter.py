@@ -127,6 +127,7 @@ class RedisReporter(QueueStatReporter):
 
     def _queue_agent_send(self, address, worker, typ, data, stamp):
         if typ == "hashrate" or typ == "temp":
+            stamp = (stamp // 60) * 60
             for did, val in enumerate(data):
                 self.redis.hset("{}_{}".format(typ, stamp),
                                 "{}_{}_{}".format(address, worker, did),
