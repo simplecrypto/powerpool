@@ -1,4 +1,5 @@
 import time
+import json
 
 from gevent import sleep
 from . import QueueStatReporter
@@ -124,5 +125,16 @@ class RedisReporter(QueueStatReporter):
                                                      currency=job.currency,
                                                      merged=False)))
 
+    def _queue_agent_send(self, address, worker, typ, data, stamp):
+        print "runnings {}".format((address, worker, typ, data, stamp))
+        if typ == "hashrate" or typ == "temp":
+            address += "." + worker
+            self.redis.hset("{}_{}".format(typ, stamp), address, data)
+        elif typ == "status":
+            self.redis.set("status_{}_{}".format(address, worker), json.dumps(data))
+        else:
+            self.logger.warn("Recieved unsupported ppagent type {}"
+                             .format(typ))
+
     def agent_send(self, *args, **kwargs):
-        pass
+        self.queue.put(("_queue_agent_send", args, kwargs))
