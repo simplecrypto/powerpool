@@ -6,18 +6,21 @@ from hashlib import sha256
 from binascii import hexlify
 
 from ..stratum_server import StratumClient
+from ..lib import loop
 from ..exceptions import ConfigurationError
 from . import Reporter
 
 
 class DoubleReporter(Reporter):
     defaults = dict(reporters=[])
+    gl_methods = ['_process_minute_slices']
 
     def __init__(self, config):
         self._configure(config)
         super(DoubleReporter, self).__init__()
         # Terrible, messy hack to get the child reporters to not log shares...
         self.child_reporters = []
+        self._per_address_slices = {}
         Reporter.log_share = lambda *args, **kwargs: None
 
     def start(self):
@@ -85,6 +88,39 @@ class DoubleReporter(Reporter):
         for reporter in self.child_reporters:
             reporter.log_share(client, diff, typ, params, job=job,
                                header_hash=header_hash, header=header)
+
+        # reporting for vardiff rates
+        slc_time = (int(time.time()) // 60) * 60
+        address = client.address
+        if typ == StratumClient.VALID_SHARE:
+            slc = self._per_address_slices.setdefault(slc_time, {})
+            if address not in slc:
+                slc[address] = diff
+            else:
+                slc[address] += diff
+
+    @loop(interval=61)
+    def _process_minute_slices(self):
+        # Clean up old per address slices as well
+        self.logger.info("Cleaning up old vardiff trackers")
+        ten_ago = ((time.time() // 60) * 60) - 600
+        for stamp in self._per_address_slices.keys():
+            if stamp < ten_ago:
+                del self._per_address_slices[stamp]
+
+    def spm(self, address):
+        """ Called by the client code to determine how many shares per second
+        are currently being submitted. Automatically cleans up the times older
+        than 10 minutes. """
+        mins = 0
+        total = 0
+        for stamp in self._per_address_slices.keys():
+            val = self._per_address_slices[stamp].get(address)
+            if val is not None:
+                total += val
+                mins += 1
+
+        return total / (mins or 1)  # or 1 prevents divison by zero error
 
     def agent_send(self, *args, **kwargs):
         for reporter in self.child_reporters:
