@@ -53,12 +53,15 @@ class GenericClient(object):
         self._wloop = spawn(self.write)
 
     def stop(self, exit_exc=None, caller=None):
+        spawn(self._stop)
+
+    def _stop(self, exit_exc=None, caller=None):
         if self._stopped:
             return
 
         self._stopped = True
-        self._rloop.kill()
-        self._wloop.kill()
+        self._rloop.kill(block=True)
+        self._wloop.kill(block=True)
 
         # handle clean disconnection from client
         try:
