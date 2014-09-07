@@ -95,7 +95,7 @@ class RedisReporter(QueueStatReporter):
                                              hash=hex_hash,
                                              currency=currency,
                                              algo=algo,
-                                             merged=merged,
+                                             merged=int(bool(merged)),
                                              **chain_indexs))
 
     def _queue_log_share(self, address, shares, algo, currency, merged=False):
