@@ -46,7 +46,11 @@ class GenericClient(object):
 
     def start(self):
         self.server.add_client(self)
-        self.peer_name = self.sock.getpeername()
+        try:
+            self.peer_name = self.sock.getpeername()
+        except socket.error:
+            self.logger.warn(
+                "Peer was no longer connected when trying to setup connection.")
         self.fp = self.sock.makefile()
 
         self._rloop = spawn(self.read)

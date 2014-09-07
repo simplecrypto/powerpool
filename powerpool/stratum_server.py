@@ -42,7 +42,9 @@ class StratumServer(Component, StreamServer):
                      'reject_low_share_n1', 'reject_dup_share_n1',
                      'reject_stale_share_n1', 'acc_share_n1',
                      'reject_low_share_count', 'reject_dup_share_count',
-                     'reject_stale_share_count', 'acc_share_count']
+                     'reject_stale_share_count', 'acc_share_count',
+                     'unk_err', 'not_authed_err', 'not_subbed_err']
+    # enhance readability by reducing magic number use...
     defaults = dict(address="0.0.0.0",
                     port=3333,
                     start_difficulty=128,
@@ -580,6 +582,7 @@ class StratumClient(GenericClient):
         except ValueError:
             self.logger.warn("Data {}.. not JSON".format(line[:15]))
             self.send_error()
+            self._incr('unk_err')
             return
 
         # handle malformed data
