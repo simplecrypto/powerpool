@@ -47,7 +47,7 @@ class DoubleReporter(Reporter):
             # Some coins use POW function to do blockhash, while others use SHA256.
             # Allow toggling
             if job.pow_block_hash:
-                header_hash_raw = client.algo(header)[::-1]
+                header_hash_raw = client.algo['module'](header)[::-1]
             else:
                 header_hash_raw = sha256(sha256(header).digest()).digest()[::-1]
             hash_hex = hexlify(header_hash_raw)
