@@ -111,7 +111,10 @@ class ServerMonitor(Component, WSGIServer):
         return jsonify(**{address: [client.details for client in clients]})
 
     def comp(self, comp_key):
-        return jsonify(**self.manager.components[comp_key].status)
+        try:
+            return jsonify(**self.manager.components[comp_key].status)
+        except KeyError:
+            abort(404)
 
     def clients_comp(self, comp_key):
         try:
