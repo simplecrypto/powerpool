@@ -36,9 +36,15 @@ class NodeMonitorMixin(object):
         remlist = []
         for conn in self._down_connections:
             try:
-                conn.getinfo()
+                info = conn.getinfo()
             except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
                 self.logger.info("RPC connection {} still down!".format(conn.name))
+                continue
+
+            # check if we've got connections on the daemon
+            if not info.get('connections', 5):
+                self.logger.info("Connected to {}, but RPC server has no connections"
+                                 .format(conn.name))
                 continue
 
             self._live_connections.append(conn)
