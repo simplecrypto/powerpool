@@ -3,6 +3,7 @@ import socket
 import time
 import datetime
 
+from binascii import hexlify
 from cryptokit.rpc import CoinRPCException
 from collections import deque
 from cryptokit.util import pack
@@ -95,23 +96,19 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
 
                 # submit it to our reporter if configured to do so
                 if self.config['send']:
-                    self.logger.info("Submitting {} new block to reporter"
-                                     .format(self.config['currency']))
-                    # A horrible mess that grabs the required information for
+                    hsh = hexlify(pack.IntType(256, 'big').pack(aux_data['hash']))
+                    self.logger.info("{} BLOCK {}:{} accepted"
+                                     .format(self.config['currency'], hsh, new_height))
+                    # A bit of a mess that grabs the required information for
                     # reporting the new block. Pretty failsafe so at least
                     # partial information will be reporter regardless
-                    try:
-                        hsh = self.call_rpc('getblockhash', new_height)
-                    except Exception:
-                        self.logger.info("", exc_info=True)
-                        hsh = ''
                     try:
                         block = self.call_rpc('getblock', hsh)
                     except Exception:
                         self.logger.info("", exc_info=True)
                     try:
-                        trans = self.call_rpc('gettransaction', block['tx'][0])
-                        amount = trans['details'][0]['amount']
+                        trans = self.call_rpc('gettxout', block['tx'][0], 0)
+                        amount = trans['value']
                     except Exception:
                         self.logger.info("", exc_info=True)
                         amount = -1
