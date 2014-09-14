@@ -39,6 +39,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         self.last_work = {'hash': None}
         self.block_stats = dict(accepts=0,
                                 rejects=0,
+                                stale=0,
                                 solves=0,
                                 last_solve_height=None,
                                 last_solve_time=None,
@@ -58,9 +59,12 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
 
     def found_block(self, address, worker, header, coinbase_raw, job, start):
         aux_data = job.merged_data[self.config['currency']]
+        new_height = aux_data['height'] + 1
         self.block_stats['solves'] += 1
+        stale = new_height <= self.current_net['height']
+
         self.logger.info("New {} Aux block at height {}"
-                         .format(self.config['currency'], aux_data['height']))
+                         .format(self.config['currency'], new_height))
         aux_block = (
             pack.IntType(256, 'big').pack(aux_data['hash']).encode('hex'),
             bitcoin_data.aux_pow_type.pack(dict(
@@ -78,7 +82,6 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         retries = 0
         while retries < 5:
             retries += 1
-            new_height = aux_data['height'] + 1
             res = False
             try:
                 res = self.call_rpc('getauxblock', *aux_block)
@@ -88,7 +91,6 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                 self.logger.error(getattr(e, 'error'))
 
             if res is True:
-                self.logger.info("NEW {} Aux BLOCK ACCEPTED!!!".format(self.config['currency']))
                 # Record it for the stats
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
@@ -133,7 +135,10 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                     exc_info=True)
             sleep(1)
         else:
-            self.block_stats['rejects'] += 1
+            if stale:
+                self.block_stats['stale'] += 1
+            else:
+                self.block_stats['rejects'] += 1
 
         self.block_stats['last_solve_height'] = aux_data['height'] + 1
         self.block_stats['last_solve_worker'] = "{}.{}".format(address, worker)
