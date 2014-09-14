@@ -1,4 +1,5 @@
 import yaml
+import socket
 import argparse
 import datetime
 import setproctitle
@@ -57,6 +58,7 @@ class PowerPool(Component):
                     extranonce_size=4,
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
+                    events=dict(enabled=False, port=8100, host="127.0.0.1"),
                     algorithms=dict(
                         x11={"module": "drk_hash.getPoWHash",
                              "hashes_per_share": 4294967296},
@@ -150,9 +152,18 @@ class PowerPool(Component):
                 self.logger.info("Enabling {} hashing algorithm from module {}"
                                  .format(name, mod))
 
+        self.event_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.events_enabled = self.config['events']['enabled']
+        self.events_address = (self.config['events']['host'].encode('utf8'),
+                               self.config['events']['port'])
+
         # Setup all our stat managers
         self._min_stat_counters = []
         self._sec_stat_counters = []
+
+    def log_event(self, event):
+        if self.events_enabled:
+            self.event_socket.sendto(event, self.events_address)
 
     def start(self):
         for comp in self.components.itervalues():

@@ -355,7 +355,7 @@ class StratumClient(GenericClient):
         err = {'id': id_val,
                'result': None,
                'error': (num, self.errors[num], None)}
-        self.logger.warn("Error number {} on ip {}".format(num, self.peer_name[0]))
+        self.logger.debug("Error number {}".format(num, self.peer_name[0]))
         self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self, id_val=1):
@@ -446,6 +446,8 @@ class StratumClient(GenericClient):
             # since we can't identify the diff we just have to assume it's
             # current diff
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
+            self.manager.log_event("ip.stale.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event("user.stale.{}:1|c".format(self.address))
             self.reporter.log_share(client=self,
                                     diff=self.difficulty,
                                     typ=self.STALE_SHARE,
@@ -458,6 +460,8 @@ class StratumClient(GenericClient):
             job = self.jobmanager.jobs[jobid]
         except KeyError:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
+            self.manager.log_event("ip.stale.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event("user.stale.{}:1|c".format(self.address))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.STALE_SHARE,
@@ -478,6 +482,8 @@ class StratumClient(GenericClient):
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE_ERR, id_val=data['id'])
+            self.manager.log_event("ip.dup.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event("user.dup.{}:1|c".format(self.address))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.DUP_SHARE,
@@ -491,6 +497,8 @@ class StratumClient(GenericClient):
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF_ERR, id_val=data['id'])
+            self.manager.log_event("ip.low_diff.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event("user.low_diff.{}:1|c".format(self.address))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.LOW_DIFF_SHARE,
@@ -651,6 +659,9 @@ class StratumClient(GenericClient):
             except IndexError:
                 password = ""
                 username = ""
+
+            self.manager.log_event("ip.auth.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event("user.auth.{}:1|c".format(self.peer_name[0]))
 
             self.logger.info("Authentication request from {} for username {}"
                              .format(self.peer_name[0], username))
