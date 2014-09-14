@@ -123,6 +123,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                     dict(height=job.block_height, timestamp=int(time.time())))
             else:
                 self.block_stats['rejects'] += 1
+                self.logger.info("{} BLOCK {}:{} REJECTED"
+                                 .format(self.config['currency'], hash_hex,
+                                         job.block_height))
 
             result.update(dict(
                 address=address,
@@ -158,8 +161,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                         self.logger.error(getattr(e, 'error'))
 
                 if res is None:
-                    self.logger.info("NEW BLOCK ACCEPTED by {}!"
-                                     .format(conn.name))
+                    self.logger.info("{} BLOCK {}:{} accepted by {}"
+                                     .format(self.config['currency'], hash_hex,
+                                             job.block_height, conn.name))
                     record_outcome(True)
                     break  # break retry loop if success
                 else:
@@ -267,9 +271,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.generate_job(push=new_block, flush=new_block, new_block=new_block)
 
     def new_merged_work(self, event):
-        self.generate_job(push=True, flush=event.flush)
+        self.generate_job(push=True, flush=event.flush, network='aux')
 
-    def generate_job(self, push=False, flush=False, new_block=False):
+    def generate_job(self, push=False, flush=False, new_block=False, network='main'):
         """ Creates a new job for miners to work on. Push will trigger an
         event that sends new work but doesn't force a restart. If flush is
         true a job restart will be triggered. """
@@ -383,9 +387,11 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         # Stats and notifications now that it's pushed
         if flush:
             self._incr('work_restarts')
-            self.logger.info("New main network block announced! Wiping previous jobs and pushing")
+            self.logger.info("New {} network block announced! Wiping previous"
+                             " jobs and pushing".format(network))
         elif push:
-            self.logger.info("New aux network block announced, pushing new job!")
+            self.logger.info("New {} network block announced, pushing new job!"
+                             .format(network))
             self._incr('work_pushes')
 
         if new_block:
