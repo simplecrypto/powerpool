@@ -52,6 +52,7 @@ class RedisReporter(QueueStatReporter):
         # Import reporter type specific modules here as to not require them
         # for using powerpool with other reporters
         import redis
+        self.redis = redis
         # A list of exceptions that would indicate that retrying a queue item
         # COULD EVENTUALLY work (ie, bad connection because server
         # maintenince).  Errors that are likely to occur because of bad
@@ -60,9 +61,46 @@ class RedisReporter(QueueStatReporter):
         self.queue_exceptions = (redis.exceptions.ConnectionError,
                                  redis.exceptions.InvalidResponse,
                                  redis.exceptions.TimeoutError,
-                                 redis.exceptions.ConnectionError)
+                                 redis.exceptions.ConnectionError,
+                                 redis.exceptions.BusyLoadingError)
         self.redis = redis.Redis(**self.config['redis'])
         self.solve_cmd = self.redis.register_script(solve_rotate_multichain)
+
+    @loop(setup='_start_queue')
+    def _queue_proc(self):
+        name, args, kwargs = self.queue.peek()
+        self.logger.debug("Queue running {} with args '{}' kwargs '{}'"
+                          .format(name, args, kwargs))
+        try:
+            func = getattr(self, name, None)
+            if func is None:
+                raise NotImplementedError(
+                    "Item {} has been enqueued that has no valid function!"
+                    .format(name))
+            func(*args, **kwargs)
+        except self.queue_exceptions as e:
+            self.logger.error("Unable to process queue item, retrying! "
+                              "{} Name: {}; Args: {}; Kwargs: {};"
+                              .format(e, name, args, kwargs), exc_info=True)
+            sleep(1)
+            return False  # Don't do regular loop sleep
+        except self.redis.exceptions.ResponseError as e:
+            # https://github.com/antirez/redis/blob/b892ea70ae4c2da7a0736943a4ee1915edda838d/src/redis.c#L1291
+            error_code = str(e).split(' ')[0]
+            if error_code in ['MISCONF', 'NOAUTH', 'OOM', 'NOREPLICAS', 'BUSY']:
+                self.logger.error("Unable to process queue item, retrying! "
+                                  "{} Name: {}; Args: {}; Kwargs: {};"
+                                  .format(e, name, args, kwargs), exc_info=True)
+                sleep(1)
+                return False  # Don't do regular loop sleep
+        except Exception:
+            # Log any unexpected problem, but don't retry because we might
+            # end up endlessly retrying with same failure
+            self.logger.error("Unkown error, queue data discarded!"
+                              "Name: {}; Args: {}; Kwargs: {};"
+                              .format(name, args, kwargs), exc_info=True)
+        # By default we want to remove the item from the queue
+        self.queue.get()
 
     @property
     def status(self):
