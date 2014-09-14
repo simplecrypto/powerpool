@@ -82,6 +82,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         """ For display in the http monitor """
         return dict(net_state=self.current_net,
                     block_stats=self.block_stats,
+                    last_signal=self.last_signal,
                     currency=self.config['currency'],
                     job_count=len(self.jobs))
 
@@ -381,8 +382,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.jobs.clear()
         self.jobs[job_id] = bt_obj
         self.latest_job = job_id
-        self.new_job.set()
-        self.new_job.clear()
+        if push or flush:
+            self.new_job.set()
+            self.new_job.clear()
 
         # Stats and notifications now that it's pushed
         if flush:
