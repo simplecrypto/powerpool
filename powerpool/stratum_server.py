@@ -686,11 +686,13 @@ class StratumClient(GenericClient):
                     (time.time() - self.last_diff_adj) > self.config['vardiff']['interval']):
                 self.recalc_vardiff()
 
+        elif meth == "mining.get_transactions":
+            self.send_error(id_val=data['id'])
         elif meth == "mining.extranonce.subscribe":
             self.send_success(id_val=data['id'])
 
         else:
-            self.logger.warn("Unkown action {} for command {}"
+            self.logger.info("Unkown action {} for command {}"
                              .format(data['method'][:20], self.peer_name[0]))
             self._incr('unk_err')
             self.send_error(id_val=data['id'])
