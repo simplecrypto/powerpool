@@ -320,15 +320,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             auxdata = {}
             mm_data = None
 
-        self.logger.info("Generating new block template with {} trans. "
-                         "Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}. "
-                         "Merged chains: {}"
-                         .format(len(self._last_gbt['transactions']),
-                                 bits_to_difficulty(self._last_gbt['bits']),
-                                 self._last_gbt['coinbasevalue'] / 100000000.0,
-                                 self._last_gbt['height'],
-                                 ', '.join(auxdata.keys())))
-
         # here we recalculate the current merkle branch and partial
         # coinbases for passing to the mining clients
         coinbase = Transaction()
@@ -386,9 +377,20 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.new_job.set()
             self.new_job.clear()
 
+            self.logger.info("{}: New block template with {:,} trans. "
+                             "Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}. "
+                             "Merged: {}"
+                             .format("FLUSH" if flush else "PUSH",
+                                     len(self._last_gbt['transactions']),
+                                     bits_to_difficulty(self._last_gbt['bits']),
+                                     self._last_gbt['coinbasevalue'] / 100000000.0,
+                                     self._last_gbt['height'],
+                                     ', '.join(auxdata.keys())))
+
         # Stats and notifications now that it's pushed
         if flush:
             self._incr('work_restarts')
+            self._incr('work_pushes')
             self.logger.info("New {} network block announced! Wiping previous"
                              " jobs and pushing".format(network))
         elif push:
