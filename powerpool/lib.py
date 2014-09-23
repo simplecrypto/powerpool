@@ -1,5 +1,7 @@
 import time
 import logging
+import zerorpc
+import gevent.queue
 
 from collections import deque
 from gevent import sleep, spawn
@@ -128,6 +130,69 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
     return loop_deco
 
 
+class Publisher(object):
+    _subscribers = set()
+
+    def subscribe(self):
+        try:
+            queue = gevent.queue.Queue()
+            self._subscribers.add(queue)
+            for msg in queue:
+                yield msg
+        finally:
+            self._subscribers.remove(queue)
+
+    zmq_subscribe = zerorpc.stream(subscribe)
+
+    def publish(self, *args, **kwargs):
+        for queue in self._subscribers:
+            if queue.qsize() < self._max_queue_size:
+                queue.put((args, kwargs))
+
+
+class LoggingPublisher(object):
+    _subscribers = set()
+    _max_queue_size = 50
+
+    def subscribe(self, level=20):
+        try:
+            queue = gevent.queue.Queue()
+            queue.level = level
+            self._subscribers.add(queue)
+            for msg in queue:
+                yield msg
+        finally:
+            self._subscribers.remove(queue)
+
+    zmq_subscribe = zerorpc.stream(subscribe)
+
+    def publish(self, level, *args, **kwargs):
+        for queue in self._subscribers:
+            if level >= queue.level and queue.qsize() < self._max_queue_size:
+                queue.put((args, kwargs))
+
+    log = publish
+    def debug(self, *args, **kwargs):
+        self.log(10, *args, **kwargs)
+    def info(self, *args, **kwargs):
+        self.log(20, *args, **kwargs)
+    def warn(self, *args, **kwargs):
+        self.log(30, *args, **kwargs)
+    def error(self, *args, **kwargs):
+        self.log(40, *args, **kwargs)
+    def critical(self, *args, **kwargs):
+        self.log(50, *args, **kwargs)
+
+
+def thread():
+    @wraps(f)
+    def wrapper(self, *args, **kwargs):
+        f._thread = True
+        return f(self, *args, **kwargs)
+
+    return wrapper
+
+
 class Component(object):
     """ Abstract base class documenting the component architecture expectations
     """
@@ -137,10 +202,9 @@ class Component(object):
     key = None
     # A list of class methods that are independent greenlets. These will
     # automatically get started and stopped at appropriate times.
-    gl_methods = []
     one_min_stats = []
     one_sec_stats = []
-    dependencies = {}
+    logger = Publisher()
 
     @property
     def name(self):
@@ -164,21 +228,22 @@ class Component(object):
             raise ConfigurationError("Invalid logging level specified")
         self.key = self.config.get('key')
 
-    def __getitem__(self, key):
-        """ Easy access to configuration values! """
-        return self.config[key]
-
     def start(self):
         """ Called when the application is starting. """
         log_level = self.config.get('log_level')
+
         if log_level:
             self.logger.setLevel(getattr(logging, log_level))
         self.logger.info("Component {} starting up".format(self.name))
-        self.greenlets = {}
+        self.greenlets = set()
         for method in self.gl_methods:
-            gl = spawn(getattr(self, method))
-            self.logger.info("Starting greenlet {}".format(method))
-            self.greenlets[method] = gl
+            self.start_thread(getattr(self, method))
+
+    def start_thread(self, callable, **args, **kwargs):
+        """ A simple wrapper around spawn. """
+        gl = spawn(callable)
+        self.logger.info("Starting greenlet {}".format(callable.__name__))
+        self.greenlets.add(gl)
 
     def stop(self):
         """ Called when the application is trying to exit. Should not block.
