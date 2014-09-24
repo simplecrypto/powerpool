@@ -1,6 +1,7 @@
 import time
 import logging
 
+from copy import deepcopy
 from collections import deque
 from gevent import sleep, spawn
 from functools import wraps
@@ -150,7 +151,7 @@ class Component(object):
         """ Applies defaults and checks requirements of component configuration
         """
         # Apply defaults
-        self.config = self.defaults.copy()
+        self.config = deepcopy(self.defaults)
         # Override defaults with provided config information
         recursive_update(self.config, config)
         for key, value in self.config.iteritems():
