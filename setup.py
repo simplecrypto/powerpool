@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 
 setup(name='powerpool',
-      version='0.5.1',
+      version='0.7.0-dev',
       description='A pluggable mining pool server implementation',
       author='Isaac Cook',
       author_email='isaac@simpload.com',
