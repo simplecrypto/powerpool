@@ -133,6 +133,10 @@ class PowerPool(Component):
         self.logger.info("PowerPool stratum server ({}) starting up..."
                          .format(self.config['procname']))
 
+        if __debug__:
+            self.logger.info("Python not running in optimized mode. For best "
+                             "performance set enviroment variable PYTHONOPTIMIZE=2")
+
         # Detect and load all the hash functions we can find
         for name, algo_data in self.config['algorithms'].iteritems():
             self.algos[name] = algo_data.copy()
