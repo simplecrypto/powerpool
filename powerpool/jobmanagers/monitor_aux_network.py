@@ -101,25 +101,28 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                     hsh = hexlify(pack.IntType(256, 'big').pack(aux_data['hash']))
                     self.logger.info("{} BLOCK {}:{} accepted"
                                      .format(self.config['currency'], hsh, new_height))
+
                     # A bit of a mess that grabs the required information for
                     # reporting the new block. Pretty failsafe so at least
                     # partial information will be reporter regardless
+                    block = None
+                    amount = 0
                     try:
                         block = self.call_rpc('getblock', hsh)
                     except Exception:
                         self.logger.info("", exc_info=True)
-                    try:
-                        trans = self.call_rpc('gettxout', block['tx'][0], 0)
-                        amount = trans['value']
-                    except Exception:
-                        self.logger.info("", exc_info=True)
-                        amount = -1
+                    else:
+                        try:
+                            trans = self.call_rpc('gettxout', block['tx'][0], 0)
+                            amount = trans['value']
+                        except Exception:
+                            self.logger.info("", exc_info=True)
 
                     self.block_stats['last_solve_hash'] = hsh
                     return dict(address=address,
                                 height=new_height,
                                 total_subsidy=int(amount * 100000000),
-                                fees=-1,
+                                fees=None,
                                 hex_bits="%0.6X" % bitcoin_data.FloatingInteger.from_target_upper_bound(aux_data['target']).bits,
                                 hex_hash=hsh,
                                 currency=self.config['currency'],
