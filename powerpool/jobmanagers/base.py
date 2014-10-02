@@ -1,4 +1,6 @@
 import urllib3
+import time
+import gevent
 
 from gevent.event import Event
 from cryptokit.rpc import CoinRPCException, CoinserverRPC
@@ -11,42 +13,61 @@ class Jobmanager(Component):
     pass
 
 
+class NodeMonitor(gevent.Greenlet):
+    maxsize = 10
+    rpc_ping_int = 2
+
+    def __init__(self, config, logger, conn_state_change, rpc_ping_int, *args,
+                 **kwargs):
+        super(NodeMonitor, self).__init__(*args, **kwargs)
+        self.__dict__.update(config)
+        self._conn_state_change = conn_state_change
+        self._conn = CoinserverRPC(
+            "http://{0}:{1}@{2}:{3}/"
+            .format(self.username,
+                    self.password,
+                    self.address,
+                    self.port),
+            pool_kwargs=dict(maxsize=self.maxsize))
+
+        self.name = "{}:{}".format(config['address'], config['port'])
+
+    @loop(setup='_start_monitor_nodes', interval='rpc_ping_int')
+    def _run(self):
+        t = time.time()
+        try:
+            self._last_info = self._conn.getinfo()
+        except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
+            self.logger.info("RPC connection {} still down!".format(self.name))
+            if not self._down:
+                self._down = True
+                self._conn_state_change.set()
+            return
+        self.last_ping = time.time()
+        self.last_ping_rtt = self.last_ping - t
+
+    def __getattr__(self):
+        return getattr(self._conn)
+
+
 class NodeMonitorMixin(object):
     def __init__(self):
-        self._down_connections = []  # list of RPC conns that are down
+        self._connections = []  # list of RPC conns that are down
         self._poll_connection = None  # our currently active RPC connection
-        self._live_connections = []  # list of live RPC connections
-        self._connected = Event()  # An event type status flag
+        # Used to let consumers know when poll_connection is live. Push instead
+        # of pull
+        self._conn_state_change = Event()
+        self._conn_state_change.rawlink(self._pick_best)
+        self._connected = Event()
 
     def _start_monitor_nodes(self):
         for serv in self.config['coinservs']:
-            conn = CoinserverRPC(
-                "http://{0}:{1}@{2}:{3}/"
-                .format(serv['username'],
-                        serv['password'],
-                        serv['address'],
-                        serv['port']),
-                pool_kwargs=dict(maxsize=serv.get('maxsize', 10)))
-            conn.config = serv
-            conn.name = "{}:{}".format(serv['address'], serv['port'])
-            self._down_connections.append(conn)
+            conn = NodeMonitor(
+                serv, self.logger, self._conn_state_change, self.rpc_ping_int)
+            self._connections.append(conn)
 
-    @loop(setup='_start_monitor_nodes', interval='rpc_ping_int')
-    def _monitor_nodes(self):
-        remlist = []
-        for conn in self._down_connections:
-            try:
-                conn.getinfo()
-            except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
-                self.logger.info("RPC connection {} still down!".format(conn.name))
-                continue
-
-            self._live_connections.append(conn)
-            remlist.append(conn)
-            self.logger.info("Now connected to {} RPC Server {}."
-                             .format(self.config['currency'], conn.name))
-
-            # if this connection has a higher priority than current
+    def _pick_best(self):
+        for conn in self._connections:
             if self._poll_connection is not None:
                 curr_poll = self._poll_connection.config['poll_priority']
                 if conn.config['poll_priority'] > curr_poll:
@@ -60,36 +81,7 @@ class NodeMonitorMixin(object):
                 self.logger.info("RPC connection {} defaulting poll connection"
                                  .format(conn.name))
 
-        for conn in remlist:
-            self._down_connections.remove(conn)
-
-    def down_connection(self, conn):
-        """ Called when a connection goes down. Removes if from the list of
-        live connections and recomputes a new. """
-        if not conn:
-            self.logger.warn("Tried to down a NoneType connection")
-            return
-
-        if conn in self._live_connections:
-            self._live_connections.remove(conn)
-
-        if self._poll_connection is conn:
-            # find the next best poll connection
-            try:
-                self._poll_connection = min(self._live_connections,
-                                            key=lambda x: x.config['poll_priority'])
-            except ValueError:
-                self._poll_connection = None
-                self._connected.clear()
-                self.logger.error("No RPC connections available for polling!!!")
-            else:
-                self.logger.warn("RPC connection {} switching to poll_connection "
-                                 "after {} went down!"
-                                 .format(self._poll_connection.name, conn.name))
-
-        if conn not in self._down_connections:
-            self.logger.info("Server at {} now reporting down".format(conn.name))
-            self._down_connections.append(conn)
+        self._conn_state_change.clear()
 
     def call_rpc(self, command, *args, **kwargs):
         self._connected.wait()
