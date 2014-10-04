@@ -446,8 +446,8 @@ class StratumClient(GenericClient):
             # since we can't identify the diff we just have to assume it's
             # current diff
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.stale.{}:1|c".format(self.peer_name[0]))
-            self.manager.log_event("user.stale.{}:1|c".format(self.address))
+            self.manager.log_event("ip.unmapped.{0}:1|c\nuser.unmapped.{0}:1|c"
+                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=self.difficulty,
                                     typ=self.STALE_SHARE,
@@ -460,8 +460,8 @@ class StratumClient(GenericClient):
             job = self.jobmanager.jobs[jobid]
         except KeyError:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.stale.{}:1|c".format(self.peer_name[0]))
-            self.manager.log_event("user.stale.{}:1|c".format(self.address))
+            self.manager.log_event("ip.stale.{0}:1|c\nuser.stale.{0}:1|c"
+                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.STALE_SHARE,
@@ -482,8 +482,8 @@ class StratumClient(GenericClient):
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.dup.{}:1|c".format(self.peer_name[0]))
-            self.manager.log_event("user.dup.{}:1|c".format(self.address))
+            self.manager.log_event("ip.dup.{0}:1|c\nuser.dup.{0}:1|c"
+                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.DUP_SHARE,
