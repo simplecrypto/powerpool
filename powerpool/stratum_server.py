@@ -689,7 +689,7 @@ class StratumClient(GenericClient):
                 key += "reject_"
             key += StratumClient.share_type_strings[typ] + "_share"
             self.manager.log_event(
-                "{name}.{type}_share:1|c\n"
+                "{name}.{type}:1|c\n"
                 "{name}.{type}_n1:{diff}|c\n"
                 "{name}.submit_time:{t}|ms"
                 .format(name=self.manager.config['procname'], type=key,

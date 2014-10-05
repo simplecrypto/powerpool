@@ -28,11 +28,11 @@ class Reporter(Component):
                   header=None, start=None, **kwargs):
         """ Logs a share to external sources for payout calculation and
         statistics """
-        if __debug__:
-            self.logger.debug(
-                "Running log share with args {} kwargs {}"
-                .format((client._id, diff, typ, params), dict(
-                    job=job, header_hash=header_hash, header=hexlify(header))))
+        #if __debug__:
+        #    self.logger.debug(
+        #        "Running log share with args {} kwargs {}"
+        #        .format((client._id, diff, typ, params), dict(
+        #            job=job, header_hash=header_hash, header=hexlify(header))))
 
         if typ == StratumClient.VALID_SHARE:
             self.logger.debug("Valid share accepted from worker {}.{}!"
