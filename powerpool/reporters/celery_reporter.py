@@ -48,9 +48,10 @@ class CeleryReporter(StatReporter):
         self.queue.put(("add_one_minute", [], kwargs))
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,
-                  header=None):
+                  header=None, **kwargs):
         super(CeleryReporter, self).log_share(
-            client, diff, typ, params, job=job, header_hash=header_hash, header=header)
+            client, diff, typ, params, job=job, header_hash=header_hash,
+            header=header, **kwargs)
 
         # Aggregate valid shares to be reported in batches. SimpleCoin's Celery
         # worker can't really handle high load share logging with the way it's

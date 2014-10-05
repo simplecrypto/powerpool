@@ -113,10 +113,21 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         result = {}
 
         def record_outcome(success):
+            # If we've already recorded a result, then return
             if result:
                 return
-            self.logger.info("Recording block submission outcome {} after {}"
-                             .format(success, time.time() - start))
+
+            if start:
+                submission_time = time.time() - start
+                self.logger.info(
+                    "Recording block submission outcome {} after {}"
+                    .format(success, submission_time))
+                if success:
+                    self.manager.log_event(
+                        "{name}.block_submission_{curr}:{t}|ms"
+                        .format(name=self.manager.config['procname'],
+                                curr=self.config['currency'],
+                                t=submission_time * 1000))
 
             if success:
                 self.block_stats['accepts'] += 1

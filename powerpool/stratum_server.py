@@ -419,7 +419,7 @@ class StratumClient(GenericClient):
         self.job_mapper[job_id] = (self.difficulty, job.job_id)
         self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"), block=block)
 
-    def submit_job(self, data):
+    def submit_job(self, data, t):
         """ Handles recieving work submission and checking that it is valid
         , if it meets network diff, etc. Sends reply to stratum client. """
         params = data['params']
@@ -446,12 +446,11 @@ class StratumClient(GenericClient):
             # since we can't identify the diff we just have to assume it's
             # current diff
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.unmapped.{0}:1|c\nuser.unmapped.{0}:1|c"
-                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=self.difficulty,
                                     typ=self.STALE_SHARE,
-                                    params=params)
+                                    params=params,
+                                    start=t)
             return self.difficulty, self.STALE_SHARE
 
         # lookup the job in the global job dictionary. If it's gone from here
@@ -460,12 +459,11 @@ class StratumClient(GenericClient):
             job = self.jobmanager.jobs[jobid]
         except KeyError:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.stale.{0}:1|c\nuser.stale.{0}:1|c"
-                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.STALE_SHARE,
-                                    params=params)
+                                    params=params,
+                                    start=t)
             return difficulty, self.STALE_SHARE
 
         # assemble a complete block header bytestring
@@ -482,13 +480,12 @@ class StratumClient(GenericClient):
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE_ERR, id_val=data['id'])
-            self.manager.log_event("ip.dup.{0}:1|c\nuser.dup.{0}:1|c"
-                                   .format(self.peer_name[0]))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.DUP_SHARE,
                                     params=params,
-                                    job=job)
+                                    job=job,
+                                    start=t)
             return difficulty, self.DUP_SHARE
 
         job_target = target_from_diff(difficulty, job.diff1)
@@ -497,13 +494,12 @@ class StratumClient(GenericClient):
             self.logger.info("Low diff share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.LOW_DIFF_ERR, id_val=data['id'])
-            self.manager.log_event("ip.low_diff.{}:1|c".format(self.peer_name[0]))
-            self.manager.log_event("user.low_diff.{}:1|c".format(self.address))
             self.reporter.log_share(client=self,
                                     diff=difficulty,
                                     typ=self.LOW_DIFF_SHARE,
                                     params=params,
-                                    job=job)
+                                    job=job,
+                                    start=t)
             return difficulty, self.LOW_DIFF_SHARE
 
         # we want to send an ack ASAP, so do it here
@@ -517,7 +513,8 @@ class StratumClient(GenericClient):
                                 params=params,
                                 job=job,
                                 header_hash=hash_int,
-                                header=header)
+                                header=header,
+                                start=t)
 
         return difficulty, self.VALID_SHARE
 
@@ -660,8 +657,8 @@ class StratumClient(GenericClient):
                 password = ""
                 username = ""
 
-            self.manager.log_event("ip.auth.{}:1|c".format(self.peer_name[0]))
-            self.manager.log_event("user.auth.{}:1|c".format(self.peer_name[0]))
+            self.manager.log_event(
+                "{name}.auth:1|c".format(name=self.manager.config['procname']))
 
             self.logger.info("Authentication request from {} for username {}"
                              .format(self.peer_name[0], username))
@@ -672,7 +669,8 @@ class StratumClient(GenericClient):
             self.authenticated = True
             self.server.set_user(self)
 
-            # notify of success authing and send him current diff and latest job
+            # notify of success authing and send him current diff and latest
+            # job
             self.send_success(data['id'])
             self.push_difficulty()
             self.push_job()
@@ -683,18 +681,23 @@ class StratumClient(GenericClient):
                 self.send_error(24, id_val=data['id'])
                 return
 
-            diff, typ = self.submit_job(data)
+            t = time.time()
+            diff, typ = self.submit_job(data, t)
             # Log the share to our stat counters
             key = ""
             if typ > 0:
                 key += "reject_"
             key += StratumClient.share_type_strings[typ] + "_share"
-            self._incr(key + "_n1", diff)
-            self._incr(key + "_count")
+            self.manager.log_event(
+                "{name}.{type}_share:1|c\n"
+                "{name}.{type}_n1:{diff}|c\n"
+                "{name}.submit_time:{t}|ms"
+                .format(name=self.manager.config['procname'], type=key,
+                        diff=diff, t=(time.time() - t) * 1000))
 
             # don't recalc their diff more often than interval
             if (self.config['vardiff']['enabled'] is True and
-                    (time.time() - self.last_diff_adj) > self.config['vardiff']['interval']):
+                    (t - self.last_diff_adj) > self.config['vardiff']['interval']):
                 self.recalc_vardiff()
 
         elif meth == "mining.get_transactions":

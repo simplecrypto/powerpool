@@ -25,23 +25,24 @@ class Reporter(Component):
         raise NotImplementedError
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,
-                  header=None):
+                  header=None, start=None, **kwargs):
         """ Logs a share to external sources for payout calculation and
         statistics """
-        #self.logger.debug("Running log share with args {} kwargs {}"
-        #                  .format((client._id, diff, typ, params), dict(job=job,
-        #                          header_hash=header_hash, header=hexlify(header))))
+        if __debug__:
+            self.logger.debug(
+                "Running log share with args {} kwargs {}"
+                .format((client._id, diff, typ, params), dict(
+                    job=job, header_hash=header_hash, header=hexlify(header))))
 
         if typ == StratumClient.VALID_SHARE:
-            start = time.time()
             self.logger.debug("Valid share accepted from worker {}.{}!"
                               .format(client.address, client.worker))
-            # Grab the raw coinbase out of the job object before gevent can preempt
-            # to another thread and change the value. Very important!
+            # Grab the raw coinbase out of the job object before gevent can
+            # preempt to another thread and change the value. Very important!
             coinbase_raw = job.coinbase.raw
 
-            # Some coins use POW function to do blockhash, while others use SHA256.
-            # Allow toggling
+            # Some coins use POW function to do blockhash, while others use
+            # SHA256. Allow toggling which is used
             if job.pow_block_hash:
                 header_hash_raw = client.algo['module'](header)[::-1]
             else:
@@ -101,9 +102,10 @@ class StatReporter(Reporter):
                                   "don't use the StatReporter!")
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,
-                  header=None):
+                  header=None, **kwargs):
         super(StatReporter, self).log_share(
-            client, diff, typ, params, job=job, header_hash=header_hash, header=header)
+            client, diff, typ, params, job=job, header_hash=header_hash,
+            header=header, **kwargs)
         address, worker = client.address, client.worker
         algo = client.algo['name']
         slc_time = (int(time.time()) // 60) * 60

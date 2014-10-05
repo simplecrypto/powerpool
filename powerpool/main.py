@@ -58,7 +58,7 @@ class PowerPool(Component):
                     extranonce_size=4,
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
-                    events=dict(enabled=False, port=8100, host="127.0.0.1"),
+                    events=dict(enabled=False, port=8125, host="127.0.0.1"),
                     algorithms=dict(
                         x11={"module": "drk_hash.getPoWHash",
                              "hashes_per_share": 4294967296},
@@ -154,6 +154,9 @@ class PowerPool(Component):
 
         self.event_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.events_enabled = self.config['events']['enabled']
+        if self.events_enabled:
+            self.logger.info("Transmitting statsd formatted stats to {}:{}".format(
+                self.config['events']['host'], self.config['events']['port']))
         self.events_address = (self.config['events']['host'].encode('utf8'),
                                self.config['events']['port'])
 
