@@ -688,6 +688,9 @@ class StratumClient(GenericClient):
             if typ > 0:
                 key += "reject_"
             key += StratumClient.share_type_strings[typ] + "_share"
+            if typ == 0:
+                # Increment valid shares to calculate hashrate
+                self._incr(key + "_n1", diff)
             self.manager.log_event(
                 "{name}.{type}:1|c\n"
                 "{name}.{type}_n1:{diff}|c\n"
