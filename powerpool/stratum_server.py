@@ -5,6 +5,7 @@ import argparse
 import struct
 import random
 import time
+import weakref
 
 from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
@@ -154,9 +155,7 @@ class StratumServer(Component, StreamServer):
         client.start()
 
     def new_job(self, event):
-        jm = self.jobmanager
-        job = jm.jobs[jm.latest_job]
-
+        job = event.job
         t = time.time()
         job.stratum_string()
         flush = job.flush
@@ -332,7 +331,7 @@ class StratumClient(GenericClient):
         # Used to determine if we should send another job on read loop timeout
         self.last_job_push = t
         # Avoids repeat pushing jobs that the client already knows about
-        self.last_job_id = None
+        self.last_job = None
         # Last time vardiff happened
         self.last_diff_adj = t - self.time_seed
         # Current difficulty setting
@@ -388,7 +387,7 @@ class StratumClient(GenericClient):
                 self.logger.warn("No jobs available for worker!")
                 sleep(0.1)
 
-        if self.last_job_id == job.job_id and not timeout:
+        if self.last_job == job and not timeout:
             self.logger.info("Ignoring non timeout resend of job id {} to worker {}.{}"
                              .format(job.job_id, self.address, self.worker))
             return
@@ -411,12 +410,12 @@ class StratumClient(GenericClient):
         """ Abbreviated push update that will occur when pushing new block
         notifications. Mico-optimized to try and cut stale share rates as much
         as possible. """
-        self.last_job_id = job.job_id
+        self.last_job = job
         self.last_job_push = time.time()
         # get client local job id to map current difficulty
         self.job_counter += 1
         job_id = str(self.job_counter)
-        self.job_mapper[job_id] = (self.difficulty, job.job_id)
+        self.job_mapper[job_id] = (self.difficulty, weakref.ref(job))
         self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"), block=block)
 
     def submit_job(self, data, t):
@@ -441,26 +440,18 @@ class StratumClient(GenericClient):
         self.last_share_submit = time.time()
 
         try:
-            difficulty, jobid = self.job_mapper[data['params'][1]]
+            difficulty, job = self.job_mapper[data['params'][1]]
+            job = job()  # weakref will be none if it's been GCed
         except KeyError:
+            job = None  # Job not in jobmapper at all, we got a bogus submit
             # since we can't identify the diff we just have to assume it's
             # current diff
+            difficulty = self.difficulty
+
+        if job is None:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
             self.reporter.log_share(client=self,
                                     diff=self.difficulty,
-                                    typ=self.STALE_SHARE,
-                                    params=params,
-                                    start=t)
-            return self.difficulty, self.STALE_SHARE
-
-        # lookup the job in the global job dictionary. If it's gone from here
-        # then a new block was announced which wiped it
-        try:
-            job = self.jobmanager.jobs[jobid]
-        except KeyError:
-            self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
-            self.reporter.log_share(client=self,
-                                    diff=difficulty,
                                     typ=self.STALE_SHARE,
                                     params=params,
                                     start=t)
