@@ -378,12 +378,9 @@ class StratumClient(GenericClient):
         when a new block is found since work on the old block is
         invalid."""
         job = None
-        while True:
-            jobid = self.jobmanager.latest_job
-            try:
-                job = self.jobmanager.jobs[jobid]
-                break
-            except KeyError:
+        while job is None:
+            job = self.jobmanager.latest_job
+            if job is None:
                 self.logger.warn("No jobs available for worker!")
                 sleep(0.1)
 

@@ -383,7 +383,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         if flush:
             self.jobs.clear()
         self.jobs[job_id] = bt_obj
-        self.latest_job = job_id
+        self.latest_job = bt_obj
         if push or flush:
             self.new_job.job = bt_obj
             self.new_job.set()
