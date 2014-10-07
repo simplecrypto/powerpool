@@ -14,6 +14,7 @@ import sys
 
 from gevent import sleep
 from gevent.monkey import patch_all
+from gevent.server import DatagramServer
 patch_all()
 
 from .utils import import_helper
@@ -41,7 +42,7 @@ def main():
     PowerPool.from_raw_config(raw_config).start()
 
 
-class PowerPool(Component):
+class PowerPool(Component, DatagramServer):
     """ This is a singelton class that manages starting/stopping of the server,
     along with all statistical counters rotation schedules. It takes the raw
     config and distributes it to each module, as well as loading dynamic modules.
@@ -59,6 +60,7 @@ class PowerPool(Component):
                     default_component_log_level='INFO',
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
                     events=dict(enabled=False, port=8125, host="127.0.0.1"),
+                    datagram=dict(enabled=False, port=6855, host="127.0.0.1"),
                     algorithms=dict(
                         x11={"module": "drk_hash.getPoWHash",
                              "hashes_per_share": 4294967296},
@@ -164,6 +166,40 @@ class PowerPool(Component):
         self._min_stat_counters = []
         self._sec_stat_counters = []
 
+        if self.config['datagram']['enabled']:
+            listener = (self.config['datagram']['host'],
+                        self.config['datagram']['port'])
+            self.logger.info("Turning on UDP control server on {}"
+                             .format(listener))
+            DatagramServer.__init__(self, listener, spawn=None)
+
+    def handle(self, data, address):
+        self.logger.info("Recieved new command {}".format(data))
+        parts = data.split(" ")
+        try:
+            component = self.components[parts[0]]
+            func = getattr(component, parts[1])
+            kwargs = {}
+            args = []
+            for arg in parts[2:]:
+                if "=" in arg:
+                    k, v = arg.split("=", 1)
+                    kwargs[k] = v
+                else:
+                    args.append(arg)
+            if kwargs.pop('__spawn', False):
+                gevent.spawn(func, *args, **kwargs)
+            else:
+                func(*args, **kwargs)
+        except AttributeError:
+            self.logger.warn("Component {} doesn't have a method {}"
+                             .format(*parts))
+        except KeyError:
+            self.logger.warn("Component {} doesn't exist".format(*parts))
+        except Exception:
+            self.logger.warn("Error in called function {}!".format(data),
+                             exc_info=True)
+
     def log_event(self, event):
         if self.events_enabled:
             self.event_socket.sendto(event, self.events_address)
@@ -178,6 +214,9 @@ class PowerPool(Component):
 
         # Starts the greenlet
         Component.start(self)
+        # Start the datagram control server if it's been inited
+        if self.config['datagram']['enabled']:
+            DatagramServer.start(self, )
 
         # This is the main thread of execution, so just continue here waiting
         # for exit signals
