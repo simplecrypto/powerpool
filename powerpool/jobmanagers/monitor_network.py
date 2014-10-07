@@ -275,6 +275,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         dirty = False
         if bt != self._last_gbt:
             self._last_gbt = bt
+            self._last_gbt['update_time'] = time.time()
             dirty = True
 
         if new_block or dirty:
@@ -418,4 +419,15 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.current_net['last_block'] = time.time()
             self.current_net['prev_hash'] = bt_obj.hashprev_be_hex
             self.current_net['transactions'] = len(bt_obj.transactions)
+
+            self.manager.log_event(
+                "{name}.{curr}.difficulty:{diff}|g\n"
+                "{name}.{curr}.subsidy:{subsidy}|g\n"
+                "{name}.{curr}.job_generate:{t}|g\n"
+                "{name}.{curr}.height:{height}|g"
+                .format(name=self.manager.config['procname'],
+                        curr=self.config['currency'],
+                        subsidy=bt_obj.total_value,
+                        height=bt_obj.block_height - 1,
+                        t=(self._last_gbt['update_time'] - t) * 1000))
         self._incr('new_jobs')
