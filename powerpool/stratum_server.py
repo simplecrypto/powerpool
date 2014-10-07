@@ -98,6 +98,10 @@ class StratumServer(Component, StreamServer):
         self.stratum_id_count = 0
         self.agent_id_count = 0
 
+        # Track the last job we pushed and when we pushed it
+        self.last_flush_job = None
+        self.last_flush_time = None
+
     def start(self, *args, **kwargs):
         self.algo = self.manager.algos[self.config['algo']]
         if not self.config['reporter'] and len(self.manager.component_types['Reporter']) == 1:
@@ -164,6 +168,8 @@ class StratumServer(Component, StreamServer):
                 client._push(job, flush=flush, block=False)
         self.logger.info("New job enqueued for transmission to {} users in {}"
                          .format(len(self.clients), time_format(time.time() - t)))
+        self.last_flush_job = job
+        self.last_flush_time = time.time()
 
     @property
     def share_percs(self):
@@ -188,6 +194,7 @@ class StratumServer(Component, StreamServer):
         dct = dict(share_percs=self.share_percs,
                    mhps=hps / 1000000.0,
                    hps=hps,
+                   last_flush_job=None,
                    agent_client_count=len(self.agent_clients),
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
@@ -195,6 +202,16 @@ class StratumServer(Component, StreamServer):
                    client_count_authed=self.authed_clients,
                    client_count_active=len(self.clients) - self.idle_clients,
                    client_count_idle=self.idle_clients)
+        if self.last_flush_job:
+            j = self.last_flush_job
+            dct['last_flush_job'] = dict(
+                algo=j.algo,
+                pow_block_hash=j.pow_block_hash,
+                currency=j.currency,
+                job_id=j.job_id,
+                merged_networks=j.merged_data.keys(),
+                pushed_at=self.last_flush_time
+            )
         return dct
 
     def set_user(self, client):
