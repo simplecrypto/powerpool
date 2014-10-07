@@ -11,7 +11,6 @@ from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
 from gevent import sleep, with_timeout
 from gevent.queue import Queue
-from gevent.pool import Pool
 from gevent.server import StreamServer
 from pprint import pformat
 
@@ -81,7 +80,7 @@ class StratumServer(Component, StreamServer):
             serv = AgentServer(self)
             self.agent_servers.append(serv)
 
-        StreamServer.__init__(self, listener, spawn=Pool())
+        StreamServer.__init__(self, listener, spawn=None)
 
         # A dictionary of all connected clients indexed by id
         self.clients = {}

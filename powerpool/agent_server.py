@@ -3,7 +3,6 @@ import socket
 
 from time import time
 from gevent.queue import Queue
-from gevent.pool import Pool
 from gevent.server import StreamServer
 from gevent import with_timeout
 
@@ -25,7 +24,7 @@ class AgentServer(Component, StreamServer):
         self.server = stratum_server
         self.config = stratum_server.config
         listener = (self.config['address'], self.config['port'] + self.config['agent']['port_diff'])
-        super(AgentServer, self).__init__(listener, spawn=Pool())
+        super(AgentServer, self).__init__(listener, spawn=None)
 
     def start(self, *args, **kwargs):
         self.logger = self.server.logger
