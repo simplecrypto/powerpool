@@ -35,7 +35,7 @@ class DoubleReporter(Reporter):
             raise ConfigurationError("Must have at least one reporter!")
 
     def log_share(self, client, diff, typ, params, job=None, header_hash=None,
-                  header=None):
+                  header=None, **kwargs):
         if typ == StratumClient.VALID_SHARE:
             start = time.time()
             self.logger.debug("Valid share accepted from worker {}.{}!"
@@ -87,7 +87,7 @@ class DoubleReporter(Reporter):
 
         for reporter in self.child_reporters:
             reporter.log_share(client, diff, typ, params, job=job,
-                               header_hash=header_hash, header=header)
+                               header_hash=header_hash, header=header, **kwargs)
 
         # reporting for vardiff rates
         slc_time = (int(time.time()) // 60) * 60

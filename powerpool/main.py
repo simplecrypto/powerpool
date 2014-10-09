@@ -12,6 +12,7 @@ import time
 import logging
 import sys
 
+from gevent_helpers import BlockingDetector
 from gevent import sleep
 from gevent.monkey import patch_all
 from gevent.server import DatagramServer
@@ -141,6 +142,8 @@ class PowerPool(Component, DatagramServer):
             self.logger.info("Python not running in optimized mode. For best "
                              "performance set enviroment variable PYTHONOPTIMIZE=2")
 
+        gevent.spawn(BlockingDetector(raise_exc=False))
+
         # Detect and load all the hash functions we can find
         for name, algo_data in self.config['algorithms'].iteritems():
             self.algos[name] = algo_data.copy()
@@ -205,6 +208,7 @@ class PowerPool(Component, DatagramServer):
             self.event_socket.sendto(event, self.events_address)
 
     def start(self):
+        self.register_logger("gevent_helpers")
         for comp in self.components.itervalues():
             comp.manager = self
             comp.counters = self.register_stat_counters(comp, comp.one_min_stats, comp.one_sec_stats)
