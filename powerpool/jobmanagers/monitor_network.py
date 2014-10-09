@@ -427,7 +427,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                 "{name}.{curr}.height:{height}|g"
                 .format(name=self.manager.config['procname'],
                         curr=self.config['currency'],
+                        diff=self.current_net['difficulty'],
                         subsidy=bt_obj.total_value,
                         height=bt_obj.block_height - 1,
-                        t=(self._last_gbt['update_time'] - t) * 1000))
+                        t=(time.time() - self._last_gbt['update_time']) * 1000))
         self._incr('new_jobs')
