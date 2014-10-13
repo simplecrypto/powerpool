@@ -60,6 +60,7 @@ class StratumServer(Component, StreamServer):
                                  spm_target=20,
                                  interval=30,
                                  tiers=[8, 16, 32, 64, 96, 128, 192, 256, 512]),
+                    minimum_manual_diff=64,
                     push_job_interval=30,
                     idle_worker_disconnect_threshold=3600,
                     agent=dict(enabled=False,
@@ -646,8 +647,9 @@ class StratumClient(GenericClient):
                     pass
                 else:
                     if args.diff:
-                        self.difficulty = args.diff
-                        self.next_diff = args.diff
+                        diff = max(self.config['minimum_manual_diff'], args.diff)
+                        self.difficulty = diff
+                        self.next_diff = diff
             except IndexError:
                 password = ""
                 username = ""
