@@ -88,7 +88,9 @@ class StatReporter(Reporter):
     them to allow separation of statistics reporting and payout related
     logging. """
 
-    defaults = dict(report_pool_stats=True, pool_worker='', chain=1)
+    defaults = dict(pool_report_configs={},
+                    chain=1,
+                    attrs={})
     gl_methods = ['_report_one_min']
 
     def __init__(self):
@@ -111,8 +113,23 @@ class StatReporter(Reporter):
         slc_time = (int(time.time()) // 60) * 60
         slc = self._minute_slices.setdefault(slc_time, {})
         # log the share under user "pool" to allow easy/fast display of pool stats
-        if self.config['report_pool_stats']:
-            self._aggr_one_min("pool", self.config['pool_worker'], algo, typ, diff, slc)
+        for cfg in self.config['pool_report_configs']:
+            user = cfg['user']
+            worker = cfg['worker_format_string'].format(
+                algo=algo,
+                currency=job.currency,
+                server_name=self.manager.config['procname'],
+                **self.config['attrs'])
+            self._aggr_one_min(user, worker, algo, typ, diff, slc)
+            if cfg.get('report_merge'):
+                for currency in job.merged_data:
+                    worker = cfg['worker_format_string'].format(
+                        algo=algo,
+                        currency=currency,
+                        server_name=self.manager.config['procname'],
+                        **self.config['attrs'])
+                    self._aggr_one_min(user, worker, algo, typ, diff, slc)
+
         self._aggr_one_min(address, worker, algo, typ, diff, slc)
 
         # reporting for vardiff rates

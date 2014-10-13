@@ -25,6 +25,17 @@ RR:
     type: powerpool.reporters.RedisReporter
     redis:
         db: 15
+    # Configures special users which will get all the pool shares reported to
+    # them
+    pool_report_configs:
+        - worker_format_string: "{chain}"
+          user: "pool"
+        - worker_format_string: "{currency}"
+          user: "pool_currency"
+          report_merge: True
+        - worker_format_string: "{algo}"
+          user: "pool_algo"
+
 CR:
     type: powerpool.reporters.CeleryReporter
 DR:
