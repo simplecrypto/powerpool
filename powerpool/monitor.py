@@ -75,6 +75,8 @@ class ServerMonitor(Component, WSGIServer):
     handler_class = CustomWSGIHandler
     defaults = dict(address="127.0.0.1",
                     port=3855,
+                    JSON_SORT_KEYS=False,
+                    JSONIFY_PRETTYPRINT_REGULAR=False,
                     DEBUG=False)
 
     def __init__(self, config):
