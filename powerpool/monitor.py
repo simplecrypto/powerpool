@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, abort, send_from_directory
+from flask import Flask, jsonify, abort, send_from_directory, url_for
 from cryptokit.block import BlockTemplate
 from cryptokit.transaction import Transaction
 from gevent.wsgi import WSGIServer, WSGIHandler
@@ -50,10 +50,10 @@ class ServerMonitor(Component, WSGIServer):
         app.add_url_rule('/', 'general', self.general)
         app.add_url_rule('/debug/', 'debug', self.debug)
         app.add_url_rule('/counters/', 'counters', self.counters)
-        app.add_url_rule('/<comp_key>/clients/', 'serv_clients_comp', self.clients_comp)
-        app.add_url_rule('/<comp_key>/client/<username>', 'stratum_client', self.client)
-        app.add_url_rule('/<comp_key>/', 'component', self.comp)
-        app.add_url_rule('/<comp_key>/config', 'component_config', self.comp_config)
+        app.add_url_rule('/<comp_key>/clients/', 'clients_comp', self.clients_comp)
+        app.add_url_rule('/<comp_key>/client/<username>', 'client', self.client)
+        app.add_url_rule('/<comp_key>/', 'comp', self.comp)
+        app.add_url_rule('/<comp_key>/config', 'comp_config', self.comp_config)
         # Legacy
         app.add_url_rule('/05/clients/', 'clients', self.clients_0_5)
         app.add_url_rule('/05/', 'general_0_5', self.general_0_5)
@@ -89,15 +89,23 @@ class ServerMonitor(Component, WSGIServer):
         return jsonify(data)
 
     def general(self):
+        from .stratum_server import StratumServer
         data = {}
-        for comp in self.manager.components.itervalues():
-            key = "{}_{}".format(comp.__class__.__name__, comp.key)
+        for key, comp in self.manager.components.iteritems():
+            dict_key = "{}_{}".format(comp.__class__.__name__, key)
             try:
-                data[key] = comp.status
-            except Exception:
-                data[key] = "Component Error"
-                self.logger.error("Component {} raised invalid status"
-                                  .format(comp), exc_info=True)
+                data[dict_key] = comp.status
+                data[dict_key]['config_view'] = url_for(
+                    'comp_config', comp_key=key, _external=True)
+                if isinstance(comp, StratumServer):
+                    data[dict_key]['clients'] = url_for(
+                        'clients_comp', comp_key=key, _external=True)
+            except Exception as e:
+                err = "Component {} status call raised {}".format(key, e)
+                data[dict_key] = err
+                self.logger.error(err, exc_info=True)
+        data['debug_view'] = url_for('debug', _external=True)
+        data['counter_view'] = url_for('counters', _external=True)
         return jsonify(data)
 
     def client(self, comp_key, username):
@@ -126,8 +134,12 @@ class ServerMonitor(Component, WSGIServer):
         except KeyError:
             abort(404)
 
-        clients = {key: [item.summary for item in value]
-                   for key, value in lut.iteritems()}
+        clients = {}
+        for username, client_list in lut.iteritems():
+            clients[username] = {client._id: client.summary
+                                 for client in client_list}
+            clients[username]['details_view'] = url_for(
+                'client', comp_key=comp_key, username=username, _external=True)
 
         return jsonify(clients=clients)
 
