@@ -50,11 +50,10 @@ class ServerMonitor(Component, WSGIServer):
         app.add_url_rule('/', 'general', self.general)
         app.add_url_rule('/debug/', 'debug', self.debug)
         app.add_url_rule('/counters/', 'counters', self.counters)
-        app.add_url_rule('/client/<address>/', 'client', self.client)
         app.add_url_rule('/<comp_key>/clients/', 'serv_clients_comp', self.clients_comp)
+        app.add_url_rule('/<comp_key>/client/<username>', 'stratum_client', self.client)
         app.add_url_rule('/<comp_key>/', 'component', self.comp)
-        app.add_url_rule('/viewer/', 'viewer', self.viewer)
-        app.add_url_rule('/viewer/<path:filename>', 'viewer_sub', self.viewer)
+        app.add_url_rule('/<comp_key>/config', 'component_config', self.comp_config)
         # Legacy
         app.add_url_rule('/05/clients/', 'clients', self.clients_0_5)
         app.add_url_rule('/05/', 'general_0_5', self.general_0_5)
@@ -84,17 +83,15 @@ class ServerMonitor(Component, WSGIServer):
         Component.stop(self)
 
     def debug(self):
-        if not self.app.config['DEBUG']:
-            abort(403)
         data = {}
-        for i, comp in enumerate(self.manager.components):
-            data[i] = jsonize(comp.__dict__)
+        for key, comp in self.manager.components.iteritems():
+            data[key] = jsonize(comp.__dict__)
         return jsonify(data)
 
     def general(self):
         data = {}
         for comp in self.manager.components.itervalues():
-            key = "{}_{}".format(comp.__class__.__name__, id(comp))
+            key = "{}_{}".format(comp.__class__.__name__, comp.key)
             try:
                 data[key] = comp.status
             except Exception:
@@ -103,12 +100,19 @@ class ServerMonitor(Component, WSGIServer):
                                   .format(comp), exc_info=True)
         return jsonify(data)
 
-    def client(self, address):
-        clients = []
-        for server in self.manager.component_types['StratumServer']:
-            clients.extend(server.address_lut.get(address, []))
+    def client(self, comp_key, username):
+        try:
+            component = self.manager.components[comp_key]
+        except KeyError:
+            abort(404)
+        return jsonify(username=[client.details for client in
+                                 component.address_lut.get(username, [])])
 
-        return jsonify(**{address: [client.details for client in clients]})
+    def comp_config(self, comp_key):
+        try:
+            return jsonify(**jsonize(self.manager.components[comp_key].config))
+        except KeyError:
+            abort(404)
 
     def comp(self, comp_key):
         try:
@@ -126,11 +130,6 @@ class ServerMonitor(Component, WSGIServer):
                    for key, value in lut.iteritems()}
 
         return jsonify(clients=clients)
-
-    def viewer(self, filename=None):
-        if not filename:
-            filename = "index.html"
-        return send_from_directory(self.viewer_dir, filename)
 
     def counters(self):
         counters = []
@@ -158,6 +157,7 @@ def jsonize(item):
     if isinstance(item, dict):
         new = {}
         for k, v in item.iteritems():
+            k = str(k)
             if isinstance(v, deque):
                 new[k] = jsonize(list(v))
             else:
@@ -169,19 +169,17 @@ def jsonize(item):
             new.append(jsonize(part))
         return new
     else:
-        if isinstance(item, BlockTemplate):
-            return jsonize(item.__dict__)
-        elif isinstance(item, Transaction):
+        if isinstance(item, Transaction):
             item.disassemble()
             return item.to_dict()
         elif isinstance(item, str):
             return item.encode('string_escape')
         elif isinstance(item, set):
             return list(item)
-        elif (isinstance(item, float) or
-                isinstance(item, int) or
-                item is None or
-                isinstance(item, bool)):
+        elif isinstance(item, (int, long, bool, float)) or item is None:
             return item
+        elif hasattr(item, "__dict__"):
+            return {str(k).encode('string_escape'): str(v).encode('string_escape')
+                    for k, v in item.__dict__.iteritems()}
         else:
             return str(item)

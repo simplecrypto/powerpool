@@ -172,27 +172,12 @@ class StratumServer(Component, StreamServer):
         self.last_flush_time = time.time()
 
     @property
-    def share_percs(self):
-        """ Pretty display of what percentage each reject rate is. Counts
-        from beginning of server connection """
-        acc_tot = self.counters['acc_share_n1'].total or 1
-        low_tot = self.counters['reject_low_share_n1'].total
-        dup_tot = self.counters['reject_dup_share_n1'].total
-        stale_tot = self.counters['reject_stale_share_n1'].total
-        return dict(
-            low_perc=low_tot / float(acc_tot + low_tot) * 100.0,
-            stale_perc=stale_tot / float(acc_tot + stale_tot) * 100.0,
-            dup_perc=dup_tot / float(acc_tot + dup_tot) * 100.0,
-        )
-
-    @property
     def status(self):
         """ For display in the http monitor """
         hps = (self.algo['hashes_per_share'] *
                self.counters['acc_share_n1'].minute /
                60.0)
-        dct = dict(share_percs=self.share_percs,
-                   mhps=hps / 1000000.0,
+        dct = dict(mhps=hps / 1000000.0,
                    hps=hps,
                    last_flush_job=None,
                    agent_client_count=len(self.agent_clients),
