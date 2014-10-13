@@ -310,6 +310,7 @@ class StratumClient(GenericClient):
         self.idle = False
         self.address = None
         self.worker = None
+        self.client_type = None
         # the worker id. this is also extranonce 1
         id = self.server.stratum_id_count
         if self.manager.config['extranonce_serv_size'] == 8:
@@ -601,6 +602,10 @@ class StratumClient(GenericClient):
                 self.send_error(id_val=data['id'])
                 return
 
+            try:
+                self.client_type = data['params'][0]
+            except IndexError:
+                pass
             ret = {
                 'result': (
                     (
@@ -718,6 +723,7 @@ class StratumClient(GenericClient):
         """ Displayed on the single client view in the http status monitor """
         return dict(alltime_accepted_shares=self.accepted_shares,
                     difficulty=self.difficulty,
+                    type=self.client_type,
                     worker=self.worker,
                     id=self._id,
                     last_share_submit=str(self.last_share_submit_delta),
