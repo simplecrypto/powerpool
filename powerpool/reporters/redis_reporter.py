@@ -135,7 +135,11 @@ class RedisReporter(QueueStatReporter):
                                 "{}_{}_{}".format(address, worker, did),
                                 val)
         elif typ == "status":
-            self.redis.set("status_{}_{}".format(address, worker), json.dumps(data))
+            # Set time so we know how fresh the data is
+            data['time'] = time.time()
+            # Remove the data in 1 day
+            self.redis.setex("status_{}_{}".format(address, worker),
+                             json.dumps(data), 86400)
         else:
             self.logger.warn("Recieved unsupported ppagent type {}"
                              .format(typ))
