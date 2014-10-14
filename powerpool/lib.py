@@ -100,18 +100,21 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
                             exit_exc = e
                             return
                         sleep(backoff)
-                        self.logger.error("Unhandled error in {}".format(f.__name__),
-                                          exc_info=True)
+                        self.logger.error(
+                            "Unhandled error in {}".format(f.__name__),
+                            exc_info=True)
                         continue
 
                     if res is False:
                         continue
 
                     if precise:
-                        # Integer computation is about twice as fast as float, and
-                        # we don't need the precision of floating point anywhere...
+                        # Integer computation is about twice as fast as float,
+                        # and we don't need the precision of floating point
+                        # anywhere...
                         now = int(time.time())
-                        sleep(((now // precise_val) * precise_val) + interval_val - now)
+                        sleep(((now // precise_val) * precise_val) +
+                              interval_val - now)
                     elif interval:
                         sleep(interval_val)
 
@@ -121,7 +124,7 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
                 exit_exc = e
             finally:
                 if fin_func:
-                    fin_func(exit_exc=exit_exc, caller=f)
+                    return fin_func(exit_exc=exit_exc, caller=f)
                 elif exit_exc is not None:
                     raise exit_exc
 
