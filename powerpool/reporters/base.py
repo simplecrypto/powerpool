@@ -112,12 +112,13 @@ class StatReporter(Reporter):
         algo = client.algo['name']
         slc_time = (int(time.time()) // 60) * 60
         slc = self._minute_slices.setdefault(slc_time, {})
+        currency = job.currency if job else "UNKNOWN"
         # log the share under user "pool" to allow easy/fast display of pool stats
         for cfg in self.config['pool_report_configs']:
             user = cfg['user']
             worker = cfg['worker_format_string'].format(
                 algo=algo,
-                currency=job.currency,
+                currency=currency,
                 server_name=self.manager.config['procname'],
                 **self.config['attrs'])
             self._aggr_one_min(user, worker, algo, typ, diff, slc)
