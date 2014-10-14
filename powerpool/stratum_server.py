@@ -398,8 +398,9 @@ class StratumClient(GenericClient):
         # we push the next difficulty here instead of in the vardiff block to
         # prevent a potential mismatch between client and server
         if self.next_diff != self.difficulty:
-            self.logger.info("Pushing diff updae {} -> {} before job for {}.{}"
-                             .format(self.difficulty, self.next_diff, self.address, self.worker))
+            self.logger.info(
+                "Pushing diff update {} -> {} before job for {}.{}"
+                .format(self.difficulty, self.next_diff, self.address, self.worker))
             self.difficulty = self.next_diff
             self.push_difficulty()
 
