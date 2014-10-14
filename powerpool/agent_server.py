@@ -24,18 +24,25 @@ class AgentServer(Component, StreamServer):
     def __init__(self, stratum_server):
         self.server = stratum_server
         self.config = stratum_server.config
-        listener = (self.config['address'], self.config['port'] + self.config['agent']['port_diff'])
-        super(AgentServer, self).__init__(listener, spawn=Pool())
 
     def start(self, *args, **kwargs):
         self.logger = self.server.logger
+        self.listener = (self.config['address'],
+                         self.config['port'] +
+                         self.config['agent']['port_diff'] +
+                         self.server.manager.config['server_number'])
+        StreamServer.__init__(self, self.listener, spawn=Pool())
+        self.logger.info("Agent server starting up on {}".format(self.listener))
         StreamServer.start(self, *args, **kwargs)
         Component.start(self)
 
     def stop(self, *args, **kwargs):
-        StreamServer.stop(self, *args, **kwargs)
-        self.close()
-        self.pool.kill(block=False)
+        self.logger.info("Agent server {} stopping".format(self.listener))
+        StreamServer.close(self)
+        for serv in self.server.agent_clients.values():
+            serv.stop()
+        Component.stop(self)
+        self.logger.info("Exit")
 
     def handle(self, sock, address):
         self.logger.info("Recieving agent connection from addr {} on sock {}"

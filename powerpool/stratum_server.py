@@ -75,14 +75,11 @@ class StratumServer(Component, StreamServer):
     def __init__(self, config):
         self._configure(config)
         self.agent_servers = []
-        listener = (self.config['address'], self.config['port'])
 
         # Start a corresponding agent server
         if self.config['agent']['enabled']:
             serv = AgentServer(self)
             self.agent_servers.append(serv)
-
-        StreamServer.__init__(self, listener, spawn=Pool())
 
         # A dictionary of all connected clients indexed by id
         self.clients = {}
@@ -102,8 +99,13 @@ class StratumServer(Component, StreamServer):
         # Track the last job we pushed and when we pushed it
         self.last_flush_job = None
         self.last_flush_time = None
+        self.listener = None
 
     def start(self, *args, **kwargs):
+        self.listener = (self.config['address'],
+                         self.config['port'] + self.manager.config['server_number'])
+        StreamServer.__init__(self, self.listener, spawn=Pool())
+
         self.algo = self.manager.algos[self.config['algo']]
         if not self.config['reporter'] and len(self.manager.component_types['Reporter']) == 1:
             self.reporter = self.manager.component_types['Reporter'][0]
@@ -124,22 +126,22 @@ class StratumServer(Component, StreamServer):
             self.jobmanager = self._lookup(self.config['jobmanager'])
         self.jobmanager.new_job.rawlink(self.new_job)
 
-        self.logger.info("Stratum server starting up on {address}:{port}"
-                         .format(**self.config))
+        self.logger.info("Stratum server starting up on {}".format(self.listener))
         for serv in self.agent_servers:
             serv.start()
         StreamServer.start(self, *args, **kwargs)
         Component.start(self)
 
     def stop(self, *args, **kwargs):
-        self.logger.info("Stratum server {address}:{port} stopping"
-                         .format(**self.config))
+        self.logger.info("Stratum server {} stopping".format(self.listener))
         StreamServer.close(self)
-        for client in self.clients.values():
-            client.stop()
         for serv in self.agent_servers:
             serv.stop()
+        for client in self.clients.values():
+            client.stop()
+        StreamServer.stop(self)
         Component.stop(self)
+        self.logger.info("Exit")
 
     def handle(self, sock, address):
         """ A new connection appears on the server, so setup a new StratumClient

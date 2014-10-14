@@ -31,6 +31,8 @@ def main():
                         help='yaml configuration file to run with')
     parser.add_argument('-d', '--dump-config', action="store_true",
                         help='print the result of the YAML configuration file and exit')
+    parser.add_argument('-s', '--server-number', type=int, default=0,
+                        help='increase the configued server_number by this much')
     args = parser.parse_args()
 
     # override those defaults with a loaded yaml config
@@ -39,8 +41,7 @@ def main():
         import pprint
         pprint.pprint(raw_config)
         exit(0)
-
-    PowerPool.from_raw_config(raw_config).start()
+    PowerPool.from_raw_config(raw_config, vars(args)).start()
 
 
 class PowerPool(Component, DatagramServer):
@@ -62,6 +63,7 @@ class PowerPool(Component, DatagramServer):
                     loggers=[{'type': 'StreamHandler', 'level': 'NOTSET'}],
                     events=dict(enabled=False, port=8125, host="127.0.0.1"),
                     datagram=dict(enabled=False, port=6855, host="127.0.0.1"),
+                    server_number=0,
                     algorithms=dict(
                         x11={"module": "drk_hash.getPoWHash",
                              "hashes_per_share": 4294967296},
@@ -76,13 +78,18 @@ class PowerPool(Component, DatagramServer):
                     ))
 
     @classmethod
-    def from_raw_config(self, raw_config):
+    def from_raw_config(self, raw_config, args):
         components = {}
         types = [PowerPool, Reporter, Jobmanager, StratumServer]
         component_types = {cls.__name__: [] for cls in types}
         component_types['other'] = []
-        for key, item in raw_config.iteritems():
-            obj = import_helper(item['type'])(item)
+        for key, config in raw_config.iteritems():
+            typ = import_helper(config['type'])
+            # Pass the commandline arguments to the manager component
+            if issubclass(typ, PowerPool):
+                config['args'] = args
+
+            obj = typ(config)
             obj.key = key
             for typ in types:
                 if isinstance(obj, typ):
@@ -101,6 +108,9 @@ class PowerPool(Component, DatagramServer):
     def __init__(self, config):
         self._configure(config)
         self._log_handlers = []
+        # Parse command line args
+        self.config['server_number'] += self.config['args']['server_number']
+        self.config['procname'] += "_{}".format(self.config['server_number'])
         # setup all our log handlers
         for log_cfg in self.config['loggers']:
             if log_cfg['type'] == "StreamHandler":
@@ -171,7 +181,8 @@ class PowerPool(Component, DatagramServer):
 
         if self.config['datagram']['enabled']:
             listener = (self.config['datagram']['host'],
-                        self.config['datagram']['port'])
+                        self.config['datagram']['port'] +
+                        self.config['server_number'])
             self.logger.info("Turning on UDP control server on {}"
                              .format(listener))
             DatagramServer.__init__(self, listener, spawn=None)

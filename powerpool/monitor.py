@@ -99,15 +99,14 @@ class ServerMonitor(Component, WSGIServer):
         self.viewer_dir = os.path.join(os.path.abspath(
             os.path.dirname(__file__) + '/../'), 'viewer')
         self.app = app
-        WSGIServer.__init__(self, (self.config['address'],
-                                   self.config['port']),
-                            self.app,
-                            spawn=100,
-                            log=Logger())
 
     def start(self, *args, **kwargs):
-        self.logger.info("Stratum server starting up on {address}:{port}"
-                         .format(**self.config))
+        listener = (self.config['address'],
+                    self.config['port'] +
+                    self.manager.config['server_number'])
+        WSGIServer.__init__(self, listener, self.app, spawn=100, log=Logger())
+
+        self.logger.info("Monitoring port listening on {}".format(listener))
 
         # Monkey patch the wsgi logger
         Logger.logger = self.logger
@@ -116,9 +115,9 @@ class ServerMonitor(Component, WSGIServer):
         Component.start(self)
 
     def stop(self, *args, **kwargs):
-        self.close()
-        self.pool.kill(block=False)
+        WSGIServer.stop(self)
         Component.stop(self)
+        self.logger.info("Exit")
 
     def debug(self):
         data = {}
