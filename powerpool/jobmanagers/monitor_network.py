@@ -80,11 +80,23 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
     @property
     def status(self):
         """ For display in the http monitor """
-        return dict(net_state=self.current_net,
-                    block_stats=self.block_stats,
-                    last_signal=self.last_signal,
-                    currency=self.config['currency'],
-                    job_count=len(self.jobs))
+        ret = dict(net_state=self.current_net,
+                   block_stats=self.block_stats,
+                   last_signal=self.last_signal,
+                   currency=self.config['currency'],
+                   live_coinservers=len(self._live_connections),
+                   down_coinservers=len(self._down_connections),
+                   coinservers={},
+                   job_count=len(self.jobs))
+        for connection in self._live_connections:
+            st = connection.status()
+            st['status'] = 'live'
+            ret['coinservers'][connection.name] = st
+        for connection in self._down_connections:
+            st = connection.status()
+            st['status'] = 'down'
+            ret['coinservers'][connection.name] = st
+        return ret
 
     def start(self):
         Jobmanager.start(self)

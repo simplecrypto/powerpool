@@ -213,7 +213,19 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
 
     @property
     def status(self):
-        return dict(block_stats=self.block_stats,
-                    currency=self.config['currency'],
-                    last_signal=self.last_signal,
-                    current_net=self.current_net)
+        ret = dict(block_stats=self.block_stats,
+                   currency=self.config['currency'],
+                   last_signal=self.last_signal,
+                   live_coinservers=len(self._live_connections),
+                   down_coinservers=len(self._down_connections),
+                   coinservers={},
+                   current_net=self.current_net)
+        for connection in self._live_connections:
+            st = connection.status()
+            st['status'] = 'live'
+            ret['coinservers'][connection.name] = st
+        for connection in self._down_connections:
+            st = connection.status()
+            st['status'] = 'down'
+            ret['coinservers'][connection.name] = st
+        return ret

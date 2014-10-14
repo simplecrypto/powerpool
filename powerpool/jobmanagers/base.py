@@ -1,7 +1,9 @@
 import urllib3
+import time
 
 from gevent.event import Event
 from cryptokit.rpc import CoinRPCException, CoinserverRPC
+from urllib3.connection import HTTPConnection
 
 from ..lib import loop, Component
 from ..exceptions import RPCException
@@ -9,6 +11,54 @@ from ..exceptions import RPCException
 
 class Jobmanager(Component):
     pass
+
+
+class TimedHTTPConnection(HTTPConnection):
+    _last_rtt = 0.0
+    _request_start = 0.0
+    _connected_since = 0.0
+
+    def connect(self):
+        self._connected_since = time.time()
+        return HTTPConnection.connect(self)
+
+    def request(self, *args, **kwargs):
+        self._request_start = time.time()
+        return HTTPConnection.request(self, *args, **kwargs)
+
+    def getresponse(self, *args, **kwargs):
+        ret = HTTPConnection.getresponse(self, *args, **kwargs)
+        self._last_rtt = time.time() - self._request_start
+        return ret
+
+    @property
+    def status(self):
+        return dict(last_rtt=self._last_rtt,
+                    connected_since=self._connected_since)
+
+
+class WrappedCoinserverRPC(CoinserverRPC):
+    def __init__(self, *args, **kwargs):
+        CoinserverRPC.__init__(self, *args, **kwargs)
+        self._conn.ConnectionCls = TimedHTTPConnection
+        self.last_getinfo = None
+        self.name = None
+
+    def status(self):
+        ret = dict(last_getinfo=self.last_getinfo,
+                   connections=[])
+        for connection in self._conn.pool.queue:
+            if connection is None:
+                continue
+            ret['connections'].append(connection.status)
+        return ret
+
+    def getinfo(self, *args, **kwargs):
+        res = CoinserverRPC.__getattr__(self, "getinfo")
+        res = res(*args, **kwargs)
+        self.last_getinfo = res
+        self.last_getinfo['time'] = time.time()
+        return res
 
 
 class NodeMonitorMixin(object):
@@ -20,7 +70,7 @@ class NodeMonitorMixin(object):
 
     def _start_monitor_nodes(self):
         for serv in self.config['coinservs']:
-            conn = CoinserverRPC(
+            conn = WrappedCoinserverRPC(
                 "http://{0}:{1}@{2}:{3}/"
                 .format(serv['username'],
                         serv['password'],

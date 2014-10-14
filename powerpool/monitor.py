@@ -7,6 +7,7 @@ from collections import deque
 from .utils import time_format
 from .lib import Component
 
+import decimal
 import os
 
 
@@ -143,7 +144,7 @@ class ServerMonitor(Component, WSGIServer):
                 self.logger.error(err, exc_info=True)
         data['debug_view'] = url_for('debug', _external=True)
         data['counter_view'] = url_for('counters', _external=True)
-        return jsonify(data)
+        return jsonify(jsonize(data))
 
     def client(self, comp_key, username):
         try:
@@ -161,7 +162,7 @@ class ServerMonitor(Component, WSGIServer):
 
     def comp(self, comp_key):
         try:
-            return jsonify(**self.manager.components[comp_key].status)
+            return jsonify(**jsonize(self.manager.components[comp_key].status))
         except KeyError:
             abort(404)
 
@@ -225,6 +226,8 @@ def jsonize(item):
             return item.encode('string_escape')
         elif isinstance(item, set):
             return list(item)
+        elif isinstance(item, decimal.Decimal):
+            return float(item)
         elif isinstance(item, (int, long, bool, float)) or item is None:
             return item
         elif hasattr(item, "__dict__"):
