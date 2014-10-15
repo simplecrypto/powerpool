@@ -122,7 +122,7 @@ class StatReporter(Reporter):
                 server_name=self.manager.config['procname'],
                 **self.config['attrs'])
             self._aggr_one_min(user, worker, algo, typ, diff, slc)
-            if cfg.get('report_merge'):
+            if cfg.get('report_merge') and job:
                 for currency in job.merged_data:
                     worker = cfg['worker_format_string'].format(
                         algo=algo,
