@@ -1,7 +1,9 @@
 # ==========================================================================
 # DEFAULTS
 # Represents default configurations applied to all different component types
-# Can be overridden as show above
+# Can be overridden as show in the config.example.yml
+#
+# NOTE: The settings in this file are not used or parsed, simply informative
 # ==========================================================================
 - &stat_reporter_defaults
   type: powerpool.reporters.StatReporter
@@ -123,6 +125,10 @@
           - 192
           - 256
           - 512
+          
+  # The minimum allowable user-settable difficulty. Vardiff may still
+  # adjust lower/higher
+  minimum_manual_diff: 64
 
   # time between sending latest job to workers when there is no new block
   push_job_interval: 30
