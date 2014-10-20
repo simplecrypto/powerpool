@@ -60,7 +60,7 @@
   # should we poll the RPC server for new blocks? True will force polling,
   # null will poll if push notifications are disabled, and False will force
   # off
-  poll: False
+  poll:
 
   # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for 
   # sha...
