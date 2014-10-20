@@ -78,6 +78,8 @@
   job_generate_int: 75
   # Time between pinging rpc_servers that are down
   rpc_ping_int: 2
+  # Pay out Darkcoin masternodes if True. Blocks may be rejected if False
+  payout_drk_mn: True
 
 # The HTTP health monitor. Most configs go straight to Flask configuration
 - &server_monitor_defaults

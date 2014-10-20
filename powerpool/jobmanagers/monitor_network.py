@@ -34,7 +34,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                              currency=REQUIRED,
                              algo=REQUIRED,
                              pool_address='',
-                             signal=None)
+                             signal=None,
+                             payout_drk_mn=True)
 
     def __init__(self, config):
         NodeMonitorMixin.__init__(self)
@@ -357,9 +358,13 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                            addtl_push=[mm_data] if mm_data else [],
                            extra_script_sig=b'\0' * extranonce_length))
 
+        # Skip MN payout based on config
+        if self.config['payout_drk_mn'] is not True:
+            self._last_gbt['payee'] = ''
         # Darkcoin payee amount
         if self._last_gbt.get('payee', '') != '':
-            payout = self._last_gbt['coinbasevalue'] / 5
+            # Grab the darkcoin payout amount, default to 20%
+            payout = self._last_gbt.get('payee_amount', self._last_gbt['coinbasevalue'] / 5)
             self._last_gbt['coinbasevalue'] -= payout
             coinbase.outputs.append(
                 Output.to_address(payout, self._last_gbt['payee']))
