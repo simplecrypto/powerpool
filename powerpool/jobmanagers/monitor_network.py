@@ -358,11 +358,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                            addtl_push=[mm_data] if mm_data else [],
                            extra_script_sig=b'\0' * extranonce_length))
 
-        # Skip MN payout based on config
-        if self.config['payout_drk_mn'] is not True:
-            self._last_gbt['payee'] = ''
-        # Darkcoin payee amount
-        if self._last_gbt.get('payee', '') != '':
+        # Payout Darkcoin masternodes
+        if self._last_gbt.get('payee', '') != '' and self.config['payout_drk_mn'] is True:
             # Grab the darkcoin payout amount, default to 20%
             payout = self._last_gbt.get('payee_amount', self._last_gbt['coinbasevalue'] / 5)
             self._last_gbt['coinbasevalue'] -= payout
