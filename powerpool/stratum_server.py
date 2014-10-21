@@ -33,7 +33,7 @@ class ThrowingArgumentParser(argparse.ArgumentParser):
 
 
 password_arg_parser = ThrowingArgumentParser()
-password_arg_parser.add_argument('-d', '--diff', type=int)
+password_arg_parser.add_argument('-d', '--diff', type=float)
 
 
 class StratumServer(Component, StreamServer):
