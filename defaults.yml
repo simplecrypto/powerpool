@@ -80,6 +80,9 @@
   rpc_ping_int: 2
   # Pay out Darkcoin masternodes if True. Blocks may be rejected if False
   payout_drk_mn: True
+  # A blockheight at which to set profitability to 0. Usually used to indicate
+  # the height at which a coin is going PoS. Default is None
+  max_blockheight:
 
 # The HTTP health monitor. Most configs go straight to Flask configuration
 - &server_monitor_defaults

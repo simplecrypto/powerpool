@@ -35,7 +35,8 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                              algo=REQUIRED,
                              pool_address='',
                              signal=None,
-                             payout_drk_mn=True)
+                             payout_drk_mn=True,
+                             max_blockheight=None)
 
     def __init__(self, config):
         NodeMonitorMixin.__init__(self)
