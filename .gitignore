@@ -4,7 +4,6 @@
 *.swp
 *.swo
 .idea
-config.yml*
 
 # tmp saves
 *~

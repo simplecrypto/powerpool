@@ -1,0 +1,156 @@
+---
+pp:
+    type: powerpool.main.PowerPool
+    procname: powerpool_litecoin
+    server_number: 31
+    events:
+        enabled: True
+        port: 9050
+    datagram:
+        enabled: True
+
+redis:
+    type: powerpool.reporters.RedisReporter
+    pool_report_configs:
+        - worker_format_string: "{chain}"
+          user: "pool"
+        - worker_format_string: "{currency}"
+          user: "pool_currency"
+          report_merge: True
+    attrs:
+        chain: "LTC"
+    redis: 
+        port: 6380
+    chain: 1
+
+LTC:
+    poll: False
+    type: powerpool.jobmanagers.MonitorNetwork
+    algo: scrypt
+    currency: LTC
+    pool_address: LgdMDJhr1A4poib2WBPxdFpmLikcNSihAE
+    coinservs:
+        - port: 10080
+          address: 127.0.0.1
+          username: 
+          password:
+          poll_priority: 100
+        - port: 10081
+          address: 127.0.0.1
+          username: 
+          password:
+          poll_priority: 200
+    merged:
+        - DOGE
+        - SYS
+        - TCO
+        - ULTC
+        - PTC
+        - GRE
+
+DOGE:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: DOGE
+    flush: True
+    coinservs:
+        - port: 10050
+          address: 127.0.0.1
+          username: 
+          password:
+          poll_priority: 100
+
+GRE:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: GRE
+    coinservs:
+        - port: 10130
+          address: 127.0.0.1
+          username: 
+          password:
+
+SYS:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: SYS
+    coinservs:
+        - port: 10020
+          address: 127.0.0.1
+          username: syscoinrpc
+          password:
+
+TCO:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: TCO
+    coinservs:
+        - port: 10010
+          address: 127.0.0.1
+          username: tacocoinrpc
+          password:
+
+ULTC:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: ULTC
+    coinservs:
+        - port: 10040
+          address: 127.0.0.1
+          username: umbrella-ltcrpc
+          password:
+
+PTC:
+    work_interval: 10
+    poll: False
+    type: powerpool.jobmanagers.MonitorAuxNetwork
+    algo: scrypt
+    currency: PTC
+    coinservs:
+        - port: 10030
+          address: 127.0.0.1
+          username: pesetacoinrpc
+          password:
+
+vardiff:
+    type: powerpool.stratum_server.StratumServer
+    algo: scrypt
+    reporter: redis
+    jobmanager: LTC
+    start_difficulty: 256
+    vardiff:
+        enabled: True
+        spm_target: 30
+        tiers:
+            - 8
+            - 16
+            - 32
+            - 64
+            - 96
+            - 128
+            - 192
+            - 256
+            - 512
+            - 1024
+            - 2048
+            - 4096
+            - 8192
+            - 16384
+            - 32768
+            - 65536
+            - 131072
+    agent:
+        enabled: True
+
+mon:
+    type: powerpool.monitor.ServerMonitor
