@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
 from setuptools import setup, find_packages
+import powerpool
 
 
 setup(name='powerpool',
-      version='0.6.0-RC',
+      version=powerpool.__version__,
       description='A pluggable mining pool server implementation',
       author='Isaac Cook',
       author_email='isaac@simpload.com',
