@@ -266,7 +266,9 @@ class PowerPool(Component, DatagramServer):
         import gc
         gc.collect()
         import objgraph
-        self.logger.info("\n{}".format(objgraph.most_common_types(limit=100)))
+        print "Dumping object growth ****"
+        objgraph.show_growth(limit=100)
+        print "****"
 
     def exit(self, signal=None):
         """ Handle an exit request """
