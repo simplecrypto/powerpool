@@ -360,7 +360,9 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                            extra_script_sig=b'\0' * extranonce_length))
 
         # Payout Darkcoin masternodes
-        if self._last_gbt.get('payee', '') != '' and self.config['payout_drk_mn'] is True:
+        mn_enforcement = self._last_gbt.get('enforce_masternode_payments', True)
+        if (self.config['payout_drk_mn'] is True or mn_enforcement is True) \
+                and self._last_gbt.get('payee', '') != '':
             # Grab the darkcoin payout amount, default to 20%
             payout = self._last_gbt.get('payee_amount', self._last_gbt['coinbasevalue'] / 5)
             self._last_gbt['coinbasevalue'] -= payout
