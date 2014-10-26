@@ -237,6 +237,8 @@ class PowerPool(Component, DatagramServer):
         # for exit signals
         ######
         # Register shutdown signals
+        gevent.signal(signal.SIGUSR1, self.dump_objgraph)
+        gevent.signal(signal.SIGHUP, exit, "SIGHUP")
         gevent.signal(signal.SIGINT, exit, "SIGINT")
         gevent.signal(signal.SIGTERM, exit, "SIGTERM")
 
@@ -259,6 +261,12 @@ class PowerPool(Component, DatagramServer):
                                  "exiting without cleanup")
             self.logger.info("Exit")
             self.logger.info("=" * 80)
+
+    def dump_objgraph(self):
+        import gc
+        gc.collect()
+        import objgraph
+        self.logger.info("\n{}".format(objgraph.most_common_types(limit=100)))
 
     def exit(self, signal=None):
         """ Handle an exit request """
