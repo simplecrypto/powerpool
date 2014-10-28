@@ -1,9 +1,7 @@
 import time
 import json
 
-from gevent import sleep
 from . import QueueStatReporter
-from ..lib import loop
 from ..stratum_server import StratumClient
 
 
@@ -32,6 +30,7 @@ for key, val in pairs(keys) do
      if t[0] == "chain" and t[2] == "shares" then
          local base = "chain_" .. t[1] .. "_slice"
          local idx = redis.call('incr', base .. "_index")
+         redis.pcall('HSET', ARGV[1], "chain_" .. t[1] .. "_start_index", "" .. idx)
          redis.pcall('renamenx', base, base .. "_" .. idx)
          table.insert(idx_map, t[1] .. ":" .. idx)
      end
@@ -146,3 +145,12 @@ class RedisReporter(QueueStatReporter):
 
     def agent_send(self, *args, **kwargs):
         self.queue.put(("_queue_agent_send", args, kwargs))
+
+
+#import redis
+#redis = redis.Redis()
+#solve_cmd = redis.register_script(solve_rotate_multichain)
+#redis.hincrbyfloat("current_block_testing", "chain_1_shares", 12.5)
+#print solve_cmd(keys=[], args=["current_block_testing", time.time(),
+#                               "unproc_block_testing"])
+#exit(0)
