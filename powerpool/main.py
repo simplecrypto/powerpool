@@ -265,6 +265,12 @@ class PowerPool(Component, DatagramServer):
     def dump_objgraph(self):
         import gc
         gc.collect()
+        lens = {}
+        for o in gc.get_objects():
+            if isinstance(o, tuple):
+                lens.setdefault(len(o), []).append(o)
+        for k, v in lens.iteritems():
+            print "{}: {}\n[{}]".format(k, len(v), v[:10])
         import objgraph
         print "Dumping object growth ****"
         objgraph.show_growth(limit=100)
