@@ -328,6 +328,7 @@ class StratumClient(GenericClient):
         self.accepted_shares = 0
         # an index of jobs and their difficulty
         self.job_mapper = {}
+        self.old_job_mapper = {}
         self.job_counter = random.randint(0, 100000)
         # Allows us to avoid a bunch of clients getting scheduled at the same
         # time by offsetting most timing values by this
@@ -418,6 +419,12 @@ class StratumClient(GenericClient):
         self.last_job_push = time.time()
         # get client local job id to map current difficulty
         self.job_counter += 1
+        if self.job_counter % 10 == 0:
+            # Run a swap to avoid GC
+            tmp = self.job_mapper
+            self.old_job_mapper = self.job_mapper
+            self.job_mapper = tmp
+            self.job_mapper.clear()
         job_id = str(self.job_counter)
         self.job_mapper[job_id] = (self.difficulty, weakref.ref(job))
         self.write_queue.put(job.stratum_string() % (job_id, "true" if flush else "false"), block=block)
@@ -447,10 +454,14 @@ class StratumClient(GenericClient):
             difficulty, job = self.job_mapper[data['params'][1]]
             job = job()  # weakref will be none if it's been GCed
         except KeyError:
-            job = None  # Job not in jobmapper at all, we got a bogus submit
-            # since we can't identify the diff we just have to assume it's
-            # current diff
-            difficulty = self.difficulty
+            try:
+                difficulty, job = self.old_job_mapper[data['params'][1]]
+                job = job()  # weakref will be none if it's been GCed
+            except KeyError:
+                job = None  # Job not in jobmapper at all, we got a bogus submit
+                # since we can't identify the diff we just have to assume it's
+                # current diff
+                difficulty = self.difficulty
 
         if job is None:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
@@ -731,6 +742,7 @@ class StratumClient(GenericClient):
                     type=self.client_type,
                     worker=self.worker,
                     id=self._id,
+                    jobmapper_size=len(self.old_job_mapper) + len(self.job_mapper),
                     last_share_submit=str(self.last_share_submit_delta),
                     idle=self.idle,
                     address=self.address,
