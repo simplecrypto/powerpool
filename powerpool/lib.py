@@ -216,7 +216,7 @@ class Component(object):
             return self.manager.components[key]
         except KeyError:
             raise ConfigurationError("Cannot find component {}"
-                                     .format(self.config['reporter']))
+                                     .format(key))
 
 
 class SecondStatManager(object):
