@@ -215,6 +215,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
     def status(self):
         ret = dict(block_stats=self.block_stats,
                    currency=self.config['currency'],
+                   last_work=self.last_work,
                    last_signal=self.last_signal,
                    live_coinservers=len(self._live_connections),
                    down_coinservers=len(self._down_connections),
