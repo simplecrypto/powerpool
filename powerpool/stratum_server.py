@@ -405,9 +405,9 @@ class StratumClient(GenericClient):
             self.difficulty = self.next_diff
             self.push_difficulty()
 
-        self.logger.info("Sending job id {} to worker {}.{}{}"
-                         .format(job.job_id, self.address, self.worker,
-                                 " after timeout" if timeout else ''))
+        self.logger.debug("Sending job id {} to worker {}.{}{}"
+                          .format(job.job_id, self.address, self.worker,
+                                  " after timeout" if timeout else ''))
 
         self._push(job)
 

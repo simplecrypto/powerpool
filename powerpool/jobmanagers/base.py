@@ -88,7 +88,7 @@ class NodeMonitorMixin(object):
             try:
                 conn.getinfo()
             except (urllib3.exceptions.HTTPError, CoinRPCException, ValueError):
-                self.logger.info("RPC connection {} still down!".format(conn.name))
+                self.logger.warn("RPC connection {} still down!".format(conn.name))
                 continue
 
             self._live_connections.append(conn)
