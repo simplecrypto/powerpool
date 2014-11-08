@@ -42,3 +42,5 @@ nosetests.xml
 .ropeproject
 .sass-cache
 tags
+
+doc/_build/*
