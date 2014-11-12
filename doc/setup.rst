@@ -1,13 +1,11 @@
 Getting Setup
 =============
 
-The only external service PowerPool relies on in is its Celery broker. By
-default this will be RabbitMQ on a local connection, so simply having it
-installed will work fine.
+The only external service PowerPool relies on in is Redis.
 
 .. code-block:: bash
 
-    sudo apt-get install rabbitmq-server
+    sudo apt-get install redis-server
 
 Setup a virtualenv and install...
 
@@ -24,8 +22,7 @@ Setup a virtualenv and install...
     pip install ltc_scrypt  # for scrypt support
     pip install git+https://github.com/BlueDragon747/Blakecoin_Python_POW_Module.git@e3fb2a5d4ea5486f52f9568ffda132bb69ed8772#egg=blake_hash
 
-Now copy ``config.yml.example`` to ``config.yml``. All the defaults are
-commented out and mandatory fields are uncommented. Fill out all required fields
+Now copy ``config.yml.example`` to ``config.yml``. Fill out all required fields
 and you should be good to go for testing.
 
 .. code-block:: bash
