@@ -4,6 +4,8 @@
 # Each item in the list is a discreet component in powerpool that will get
 # created Type specifies the fully qualified python path to the module. A basic
 # powerpool server will contain one of each of the following:
+#
+# * PowerPool: handles starting/stopping + configuring everything
 # * Jobmanager: creates jobs to be sent to miners and submits solved blocks
 # * StratumServer: Accepts stratum connections and sends jobs to users, accepts
 #       shares, etc
@@ -15,54 +17,345 @@
 # * ServerMonitor: Exposes and HTTP port to view system health and connected
 #       worker information
 #
-# Each of these modules has default configurations which can be viewed
-# and explained in the defaults.yml file
 ---
+
+######################################
+# Core PowerPool
+######################################
+
+####### Core PowerPool Overview #######
+
+#PP:
+    #type: powerpool.main.PowerPool
+
+    # The name of the powerpool process on the system. Useful for quickly
+    # identifying pid with grep and ps
+    #procname: powerpool
+
+    # Grace period before outright terminating the process after termination is
+    # requested
+    #term_timeout: 10
+
+    # server side size extranonce size. synonymous with worker id internally, used
+    # to give a unique extranonce to each connection
+    #extranonce_serv_size: 4
+    # size that clients will generate in bytes
+    #extranonce_size: 4
+
+    # The log level default for all submodules. Can be overridden in any
+    # specific Component's logger with log_level attribute
+    #default_component_log_level: INFO
+
+    # Configures standard python loggers. type must be a logging handler provided
+    # by python std lib
+    #loggers:
+    #    - type: 'StreamHandler'
+    #      level: 'NOTSET'
+
+    # A list of modules and hashing algorithms that you'd like to attempt to
+    # load on startup.
+    #algorithms:
+          #x11:
+              #module: drk_hash.getPoWHash
+              #hashes_per_share: 4294967296
+          #scrypt:
+              #module: ltc_scrypt.getPoWHash
+              #hashes_per_share: 65536
+          #scryptn:
+              #module: vtc_scrypt.getPoWHash
+              #hashes_per_share: 65536
+          #sha256:
+              #module: cryptokit.sha256d
+              #hashes_per_share: 4294967296
+          #blake256:
+              #module: blake_hash.getPoWHash
+              #hashes_per_share: 65536
+
+    # This is actually an offset number - If it's set it'll offset each stratum,
+    # monitor, and PPAgent port by this amount. Basically - its handy for
+    # quickly setting up multiple PowerPool instances (its pretty confusing atm)
+    # Leave it out if you're configuring each port by hand
+    #server_number: 0
+
+    # This will push out events to something like StatSite for easy analysis
+    #events:
+    #    enabled: False
+    #    port: 8125
+    #    host: "127.0.0.1"
+
+    # This is required to be set to True to catch UDP pushblock notifications
+    #datagram:
+    #    enabled: False
+    #    port: 6855
+    #    host: "127.0.0.1"
+
+
+####### Core PowerPool example #######
+
+# This is a basic setup for the core PowerPool process.
 PP:
     type: powerpool.main.PowerPool
 
-RR:
+
+######################################
+# Reporters
+######################################
+
+# These do the grunt work on how shares are submitted + to where.
+
+#### Reporter Overview####
+#redis_overview:
+#    type: powerpool.reporters.RedisReporter
+
+    # A list of users/workers to report pool shares
+    #pool_report_configs:
+    #    - worker_format_string: "{chain}"
+    #      user: "pool"
+    #    - worker_format_string: "{currency}"
+    #      user: "pool_currency"
+    #      report_merge: True
+
+    # Can be provided to format the worker string for the pool_report_configs
+    #attrs:
+        #chain: "[LTC, VTC, DRK, etc]"
+
+    # Used directly to configured redis-py redis instance. Read redis py docs
+    # for more information
+    #redis:
+    #    port: 6380
+
+    # Shares can be submitted to redis on independent share "chains" to allow
+    # cooperatively solving blocks between many payout types. Should be different
+    # for each different payout type...
+    #chain: 1
+
+#### Example Scrypt Redis Reporter ####
+
+redis_scrypt:
     type: powerpool.reporters.RedisReporter
-    redis:
-        db: 15
-    # Configures special users which will get all the pool shares reported to
-    # them
     pool_report_configs:
         - worker_format_string: "{chain}"
           user: "pool"
         - worker_format_string: "{currency}"
           user: "pool_currency"
           report_merge: True
-        - worker_format_string: "{algo}"
-          user: "pool_algo"
+    attrs:
+        chain: "LTC"
+    redis:
+        port: 6379
+    #chain: 1
 
-CR:
-    type: powerpool.reporters.CeleryReporter
-DR:
-    type: powerpool.reporters.DoubleReporter
-    reporters:
-        - RR
-        - CR
+#### Example X11 Reporter ####
+#redis_x11:
+#    type: powerpool.reporters.RedisReporter
+#    pool_report_configs:
+#        - worker_format_string: "{chain}"
+#          user: "pool"
+#        - worker_format_string: "{currency}"
+#          user: "pool_currency"
+#          report_merge: False
+#    attrs:
+#        chain: "DRK"
+#    redis:
+#        port: 6379
+#    chain: 2
 
+#### Example Scrypt-N Reporter ####
+#redis_scrypt:
+#    type: powerpool.reporters.RedisReporter
+#    pool_report_configs:
+#        - worker_format_string: "{chain}"
+#          user: "pool"
+#        - worker_format_string: "{currency}"
+#          user: "pool_currency"
+#          report_merge: True
+#    attrs:
+#        chain: "VTC"
+#    redis:
+#        port: 6379
+#    chain: 3
+
+################################################
+# Job managers
+################################################
+
+#### Job managers Overview ####
+
+# Key here is used to identify this jobmanager elsewhere
+#LTC:
+    # A mainchain coin uses the 'MonitorNetwork' built-in
+    #type: powerpool.jobmanagers.MonitorNetwork
+
+    # Algo should be one that is enabled in the PP module above
+    #algo: REQUIRED. STR algo "scrypt", "x11", etc..
+
+    # Currency code of the network being managed here
+    #currency: REQUIRED. STR currency code "VTC", "LTC", etc
+
+    # This is the address which any solved blocks will go to
+    #pool_address: ''
+
+    # This is a list of connection information which configures PowerPool to
+    # use the coin daemons via the RPC Port. It uses the RPC to get block
+    # templates from and submit complete blocks to.
+    #coinservs: REQUIRED. Expects []
+    #    - port: 20001
+    #      address: 127.0.0.1
+    #      username: admin1
+    #      password: 123
+
+    #      #Higher priority is primary
+    #      poll_priority: 200
+
+    #### Optional configs ####
+
+    # If you have push block notifications setup you should disable polling.
+    # Read about setting up UDP push block notifications in the docs
+    #poll: None
+
+    # You can setup PowerPool to catch + use system signals as a push block
+    # notification. This is undocumented, but follows the same idea as UDP
+    #signal: None. Expects INT
+
+    # This is a tuple of coins to merge mine with this currency. Make sure each
+    # one of these is configured!
+    #merged: ()
+
+    # Should the proof of work algorithm be used to produce the block hash, or
+    # sha256. Most coins use sha256, but X11 coins and some others use the POW algo
+    #pow_block_hash: False
+
+    # the definition of a target of difficulty 1. 4 zeroes for scrypt, 8 for
+    # sha...
+    #diff1: 0x0000FFFF0000000000000000000000000000000000000000000000000000
+
+    # The number of hashes a single diff1 share takes on average to compute
+    # 0xFFFFFFFF for sha256 and dark diff, 0xFFFF for scrypt. Used for showing
+    # hashrate
+    #hashes_per_share: 0xFFFFFFFF
+
+    # time between checking live rpc for new blocks... lower means less orphan
+    # blocks... Unused if using push block signals/UDP datagrams
+    #block_poll: 0.2
+
+    # block polls between generating a new job for workers (running gbt, etc)
+    #job_refresh: 15
+
+    # Time between pinging rpc_servers that are down
+    #rpc_ping_int: 2
+
+    # Pay out Darkcoin masternodes if True. If False it check GBT response to
+    # see if enforcement is turned on. If it is not, MN are not paid out,
+    # otherwise they are. !Blocks may be rejected if False!
+    #payout_drk_mn: True
+
+
+# Now we'll look at a merge mining job manager
+#DOGE:
+    # Merge mined coins use the 'MonitorAuxNetwork' module.
+    #type: powerpool.jobmanagers.MonitorAuxNetwork
+
+    # How often to check the RPC for new Aux jobs (add in network transactions)
+    #work_interval: 1
+
+    # By default when new work for a merge mined coin is pushed out to miners it
+    # will not tell them to flush their old work. This causes less stale shares
+    # on the main chain. But causes more stale AuxBlocks (some poorly
+    # designed miners won't update their work if it isn't a flushing update)
+    # This may be worth setting to True for high value, or slower AuxChains
+    #flush: False
+
+    # Sends GBT result to the reporter
+    #send: True
+
+    # Algo should be one that is enabled in the PP module above
+    #algo: REQUIRED. STR algo "scrypt", "x11", etc..
+
+    # Currency code of the network being managed here
+    #currency: REQUIRED. STR currency code "DOGE", "SYS", etc
+
+    # This is a list of connection information which configures PowerPool to
+    # use the coin daemons via the RPC Port. It uses the RPC to get block
+    # templates from and submit complete blocks to.
+    #coinservs: REQUIRED. Expects []
+    #    - port: 20001
+    #      address: 127.0.0.1
+    #      username: admin1
+    #      password: 123
+
+    #      #Higher priority is primary
+    #      poll_priority: 200
+
+    # You can setup PowerPool to catch + use system signals as a push block
+    # notification. This is undocumented, but follows the same idea as UDP
+    #signal: None. Expects INT
+
+    # Time between pinging rpc_servers that are down
+    #rpc_ping_int: 2
+
+##### Example main chain jobmanager ####
+
+# A typical setup for a main chain coin. They use the
+# jobmanagers.MonitorNetwork module.
 LTC:
     type: powerpool.jobmanagers.MonitorNetwork
-    merged:
-        - SYS
     algo: scrypt
     currency: LTC
-    pool_address: mri1PEngsRuU6aLKQJ5gGePUdEo76C6DeT
+    pool_address: LYExXWEPs5oWjScR1fYzwSuo8DcQWNcHpF
     coinservs:
         - port: 20001
           address: 127.0.0.1
           username: admin1
           password: 123
+          poll_priority: 200
+        - port: 20002
+          address: 127.0.0.1
+          username: admin1
+          password: 123
+          poll_priority: 100
+    merged:
+        - DOGE
+        - SYS
+
+# Here is a simple example for how you might do a X11 main chain coin
+DRK:
+    type: powerpool.jobmanagers.MonitorNetwork
+    algo: x11
+    currency: DRK
+    pool_address: XbmTRsE7sDNfQMuEe7X59hGs31yLA8ETxz
+    pow_block_hash: True
+    diff1: 0x00000000FFFF0000000000000000000000000000000000000000000000000000
+    coinservs:
+        - port: 40003
+          address: 127.0.0.1
+          username: un
+          password: pw
           poll_priority: 100
 
-SYS:
+# Here is a simple example for how you might do a Scrypt-N main chain coin
+VTC:
+     type: powerpool.jobmanagers.MonitorNetwork
+     algo: scryptn
+     currency: VTC
+     pool_address: Vp2nkmREFef7RPKZ5yxHZgfsXNnUxiA5sn
+     coinservs:
+         - port: 40005
+           address: 127.0.0.1
+           username: un
+           password: pw
+
+
+##### Example aux chain jobmanager ####
+
+# A typical setup for a merge mined coin. They use the
+# jobmanagers.MonitorAuxNetwork module. If you have multiple merge mined coins
+# you'll need to setup one of these blocks for each coin
+DOGE:
     type: powerpool.jobmanagers.MonitorAuxNetwork
+    work_interval: 10
+    flush: True
     algo: scrypt
-    signal: 28
-    currency: SYS
+    currency: DOGE
     coinservs:
         - port: 19001
           address: 127.0.0.1
@@ -70,12 +363,179 @@ SYS:
           password: 123
           poll_priority: 100
 
-TEST_STRAT:
+
+################################################
+# Stratum servers
+################################################
+
+# This module configures how the Stratum Server will behave
+
+#### Stratum server Overview ####
+
+# Note: The key used for the stratum is important to the SCM frontend. It is
+# used as a part of the URL for the 'monitor_address'. So if your stratum key
+# is like the one below your SCM endpoint will need to be something like
+# 'http://localhost:3855/scrypt_STRAT'
+#scrypt_STRAT:
+    #type: powerpool.stratum_server.StratumServer
+
+    # Tell stratum which algo its using
+    #algo: REQUIRED. STR algo "scrypt", "x11", etc..
+
+    # Tell the server which jobmanager to use
+    # Note that this is using the 'LTC' job manager which we defined earlier
+    #jobmanager: None. Expects STR jobmanager key "LTC", "DRK", etc..
+
+    # Tell the server which reporter to send share data to
+    # Note that this is using the reporter 'redis_scrypt' which we defined earlier
+    #reporter: None. Expects STR reporter key such as "redis_scrypt"
+
+    ########### Connection/User Auth settings ##############
+
+    # Stratum IP address
+    #address: 0.0.0.0
+
+    # What port to run on
+    #port: 3333
+
+    # A list of valid address versions for this stratum port. Use for user Auth
+    #valid_address_versions: []
+
+    # How often to push jobs if a client hasn't submitted a share
+    # used to make sure clients connections stay active (keepalive)
+    #push_job_interval: 30
+
+    # How long between share submissions before considerand a worker idle (in seconds)
+    #idle_worker_threshold: 300
+
+    # How long before disconnecting idle workers (in seconds)
+    #idle_worker_disconnect_threshold: 3600
+
+    # Alias specific worker names to an address
+    #aliases: {}
+
+    # Donation alias
+    #donate_key: "donate"
+
+    ############# Difficulty settings ##################
+
+    # The difficulty to start people out when they connect. Will be the
+    # fixed difficulty if vardiff is disabled
+    #start_difficulty: 128
+
+    # Configuration that each vardiff enabled interface will use
+    #vardiff:
+        # whether our this port will be vardiff enabled
+        #enabled: False
+        # the overal shares per minute we're targeting
+        #spm_target: 20
+        # time between checks triggered from share submission in seconds
+        #interval: 30
+        # the available difficulty tiers. Will adjust to one of these
+        #tiers:
+        #    - 8
+        #    - 16
+        #    - 32
+        #    - 64
+        #    - 96
+        #    - 128
+        #    - 192
+        #    - 256
+        #    - 512
+
+    # Minimum difficulty settable by users. Vardiff will still adjust lower if
+    # appropriate
+    #minimum_manual_diff: 64
+
+    ################# PPAgent settings #################
+
+    # PPAgent config
+    # agent:
+    #     enabled: False
+
+    # The port offset.
+    #     port_diff: 1111
+
+    # Connection timeout (in seconds)
+    #     timeout: 120
+
+    # Data types to accept
+    #     accepted_types:
+    #          - 'temp'
+    #          - 'status'
+    #          - 'hashrate'
+    #          - 'thresholds'
+
+###### Fixed difficulty Scrypt port example ######
+
+scrypt_STRAT_fixed:
     type: powerpool.stratum_server.StratumServer
     algo: scrypt
     jobmanager: LTC
-    reporter: DR
-    start_difficulty: 0.1
+    reporter: redis_scrypt
+    start_difficulty: 4096
+    port: 3333
+    merged:
+        - DOGE
+
+####### VARDIFF Scrypt port example #######
+
+scrypt_STRAT:
+    type: powerpool.stratum_server.StratumServer
+    algo: scrypt
+    jobmanager: LTC
+    reporter: redis_scrypt
+    start_difficulty: 64
+    port: 3334
+    merged:
+        - DOGE
+    vardiff:
+      # whether our this port will be vardiff enabled
+      enabled: True
+      # the overal shares per minute we're targeting
+      spm_target: 30
+      # time between checks triggered from share submission in seconds
+      interval: 10
+      # the available difficulty tiers. Will adjust to one of these
+      tiers:
+          - 8
+          - 16
+          - 32
+          - 64
+          - 96
+          - 128
+          - 192
+          - 256
+          - 512
+          - 1024
+          - 2048
+          - 4096
+          - 8192
+
+
+################################################
+# Monitor network
+################################################
+
+# Which ServerMonitor module to use for the Stratum introspection endpoints
+
+####### Monitor Overview #######
+
+#MON:
+    #address: "127.0.0.1"
+
+    # Default port. This gets ofset
+    #port: 3855
+
+    # Whether or not to sort + pretty print the JSON output.
+    #JSON_SORT_KEYS: False
+    #JSONIFY_PRETTYPRINT_REGULAR: False
+
+    # Use DEBUG output
+    #DEBUG: False
+
+
+####### Monitor config example #######
 
 MON:
     type: powerpool.monitor.ServerMonitor
