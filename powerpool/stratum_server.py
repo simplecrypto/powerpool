@@ -7,6 +7,7 @@ import random
 import time
 import weakref
 
+from collections import deque
 from binascii import hexlify, unhexlify
 from cryptokit import target_from_diff, uint256_from_str
 from gevent import sleep, with_timeout
@@ -102,6 +103,13 @@ class StratumServer(Component, StreamServer):
         self.last_job = None
         self.last_time = None
         self.listener = None
+        # Keep track of the jobs we've recieved, both recently flushed and
+        # active
+        self.active_jobs = set()
+        # Nothing ever actually needs to be looked up in this object, it merely
+        # has to hold reference to the job objects so they don't get garbage
+        # collected
+        self.stale_jobs = deque([], maxlen=10)
 
     def start(self, *args, **kwargs):
         self.listener = (self.config['address'],
@@ -173,15 +181,21 @@ class StratumServer(Component, StreamServer):
             for client in self.clients.itervalues():
                 if client.authenticated:
                     client._push(job, flush=flush, block=False)
-            self.logger.info("New job enqueued for transmission to {} users in {}"
-                             .format(len(self.clients), time_format(time.time() - t)))
+            self.logger.info(
+                "New job enqueued for transmission to {} users in {}"
+                .format(len(self.clients), time_format(time.time() - t)))
 
             if flush:
                 self.last_flush_job = job
                 self.last_flush_time = time.time()
+                # Push the old jobs onto the stale list and generate a new
+                # blank jobs dict
+                self.stale_jobs.append(self.active_jobs)
+                self.active_jobs = set()
 
         self.last_job = job
         self.last_time = time.time()
+        self.active_jobs.add(job)
 
     @property
     def status(self):
@@ -196,6 +210,8 @@ class StratumServer(Component, StreamServer):
                    client_count=len(self.clients),
                    address_count=len(self.address_lut),
                    address_worker_count=len(self.address_lut),
+                   active_jobs=len(self.active_jobs),
+                   stale_jobs=sum([len(j) for j in self.stale_jobs]),
                    client_count_authed=self.authed_clients,
                    client_count_active=len(self.clients) - self.idle_clients,
                    client_count_idle=self.idle_clients)
@@ -460,18 +476,18 @@ class StratumClient(GenericClient):
 
         try:
             difficulty, job = self.job_mapper[data['params'][1]]
-            job = job()  # weakref will be none if it's been GCed
+            job = job()  # weakref will be None if the job has been GCed
         except KeyError:
             try:
                 difficulty, job = self.old_job_mapper[data['params'][1]]
-                job = job()  # weakref will be none if it's been GCed
+                job = job()  # weakref will be None if the job has been GCed
             except KeyError:
                 job = None  # Job not in jobmapper at all, we got a bogus submit
                 # since we can't identify the diff we just have to assume it's
                 # current diff
                 difficulty = self.difficulty
 
-        if job is None:
+        if job not in self.server.active_jobs:
             self.send_error(self.STALE_SHARE_ERR, id_val=data['id'])
             self.reporter.log_share(client=self,
                                     diff=self.difficulty,

@@ -56,6 +56,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
 
         # Currently active jobs keyed by their unique ID
         self.jobs = {}
+        self.stale_jobs = deque([], maxlen=10)
         self.latest_job = None  # The last job that was generated
         self.new_job = Event()
         self.last_signal = 0.0
