@@ -50,6 +50,7 @@ class StratumServer(Component, StreamServer):
     defaults = dict(address="0.0.0.0",
                     port=3333,
                     start_difficulty=128,
+                    server_seed=0,
                     reporter=None,
                     jobmanager=None,
                     algo=REQUIRED,
@@ -93,8 +94,11 @@ class StratumServer(Component, StreamServer):
         # counters that allow quick display of these numbers. stratum only
         self.authed_clients = 0
         self.idle_clients = 0
-        # Unique client ID counters for stratum and agents
-        self.stratum_id_count = 0
+        # Unique client ID counters for stratum and agents. We want them to
+        # unique across all clients on all servers, so we seed with some unique
+        # starting number
+        self.stratum_id_count = (self.config['port'] * 10000 +
+                                 self.config['server_seed'])
         self.agent_id_count = 0
 
         # Track the last job we pushed and when we pushed it
