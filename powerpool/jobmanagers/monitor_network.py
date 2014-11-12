@@ -393,7 +393,12 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         bt_obj.pow_block_hash = self.config['pow_block_hash']
         bt_obj.block_height = self._last_gbt['height']
         bt_obj.acc_shares = set()
-        bt_obj.flush = flush
+        if flush:
+            bt_obj.type = 0
+        elif push:
+            bt_obj.type = 1
+        else:
+            bt_obj.type = 2
         bt_obj.found_block = self.found_block
 
         # Push the fresh job to users after updating details
@@ -402,20 +407,20 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             self.jobs.clear()
         self.jobs[job_id] = bt_obj
         self.latest_job = bt_obj
-        if push or flush:
-            self.new_job.job = bt_obj
-            self.new_job.set()
-            self.new_job.clear()
 
-            self.logger.info("{}: New block template with {:,} trans. "
-                             "Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}. "
-                             "Merged: {}"
-                             .format("FLUSH" if flush else "PUSH",
-                                     len(self._last_gbt['transactions']),
-                                     bits_to_difficulty(self._last_gbt['bits']),
-                                     self._last_gbt['coinbasevalue'] / 100000000.0,
-                                     self._last_gbt['height'],
-                                     ', '.join(auxdata.keys())))
+        self.new_job.job = bt_obj
+        self.new_job.set()
+        self.new_job.clear()
+        if push or flush:
+            self.logger.info(
+                "{}: New block template with {:,} trans. "
+                "Diff {:,.4f}. Subsidy {:,.2f}. Height {:,}. Merged: {}"
+                .format("FLUSH" if flush else "PUSH",
+                        len(self._last_gbt['transactions']),
+                        bits_to_difficulty(self._last_gbt['bits']),
+                        self._last_gbt['coinbasevalue'] / 100000000.0,
+                        self._last_gbt['height'],
+                        ', '.join(auxdata.keys())))
 
         # Stats and notifications now that it's pushed
         if flush:
