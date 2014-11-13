@@ -449,7 +449,7 @@ class StratumClient(GenericClient):
         self.last_job_push = time.time()
         # get client local job id to map current difficulty
         self.job_counter += 1
-        if self.job_counter % 10 == 0:
+        if self.job_counter % 100 == 0:
             # Run a swap to avoid GC
             tmp = self.job_mapper
             self.old_job_mapper = self.job_mapper
