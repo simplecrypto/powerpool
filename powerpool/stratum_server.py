@@ -497,6 +497,7 @@ class StratumClient(GenericClient):
                                     diff=self.difficulty,
                                     typ=self.STALE_SHARE,
                                     params=params,
+                                    job=job,
                                     start=t)
             return difficulty, self.STALE_SHARE
 
