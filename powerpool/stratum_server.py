@@ -180,8 +180,18 @@ class StratumServer(Component, StreamServer):
         job = event.job
         t = time.time()
         job.stratum_string()
+        flush = job.type == 0
+        if flush:
+            # Push the old jobs onto the stale list and generate a new
+            # blank jobs dict
+            self.stale_jobs.append(self.active_jobs)
+            self.active_jobs = set()
+
+        self.last_job = job
+        self.last_time = t
+        self.active_jobs.add(job)
+
         if job.type in [0, 1]:
-            flush = job.type == 0
             for client in self.clients.itervalues():
                 if client.authenticated:
                     client._push(job, flush=flush, block=False)
@@ -192,14 +202,6 @@ class StratumServer(Component, StreamServer):
             if flush:
                 self.last_flush_job = job
                 self.last_flush_time = time.time()
-                # Push the old jobs onto the stale list and generate a new
-                # blank jobs dict
-                self.stale_jobs.append(self.active_jobs)
-                self.active_jobs = set()
-
-        self.last_job = job
-        self.last_time = time.time()
-        self.active_jobs.add(job)
 
     @property
     def status(self):
