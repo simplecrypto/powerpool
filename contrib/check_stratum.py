@@ -27,13 +27,15 @@ def wait_method(fo, target_method):
 
 
 def main():
-    start = int(time.time())
-
     parser = argparse.ArgumentParser(description='Check Stratum')
     parser.add_argument('-s', '--server', default='localhost',
                         help='the remote hostname')
     parser.add_argument('-p', '--port', type=int, default=3333,
                         help='the port to try and connect on')
+    parser.add_argument('-w', '--warn-ms', type=int, default=100,
+                        help='the response time to warn at')
+    parser.add_argument('-c', '--crit-ms', type=int, default=200,
+                        help='the response time to warn at')
     args = parser.parse_args()
 
     s = None
@@ -67,10 +69,7 @@ def main():
     t = time.time()
     ret = wait_id(f, 100)
     assert ret['error'] is None
-    print 'stratum.{}.{}.subscribe {} {}'.format(
-        args.server, args.port,
-        (time.time() - t) * 1000,
-        start)
+    subscribe_time = (time.time() - t) * 1000
 
     # authorize
     f.write(json.dumps({u'params': [u'testing', u''], u'id': 200, u'method':
@@ -79,16 +78,10 @@ def main():
     t = time.time()
     ret = wait_id(f, 200)
     assert ret['error'] is None
-    print 'stratum.{}.{}.authorize {} {}'.format(
-        args.server, args.port,
-        (time.time() - t) * 1000,
-        start)
+    auth_time = (time.time() - t) * 1000
 
     ret = wait_method(f, "mining.notify")
-    print 'stratum.{}.{}.notify {} {}'.format(
-        args.server, args.port,
-        (time.time() - t) * 1000,
-        start)
+    notif_time = (time.time() - t) * 1000
 
     # submit a job!
     t = time.time()
@@ -98,13 +91,27 @@ def main():
     f.flush()
     ret = wait_id(f, 300)
     assert ret['error'][0] is not None
-    print 'stratum.{}.{}.share_process {} {}'.format(
-        args.server, args.port,
-        (time.time() - t) * 1000,
-        start)
+    share_proc_time = (time.time() - t) * 1000
 
     f.close()
     s.close()
+
+    msg = "ok"
+    if share_proc_time > args.warn_ms:
+        msg = "warn"
+    elif share_proc_time > args.crit_ms:
+        msg = "crit"
+
+    print("STRATUM {4} - Share processed in {0} ms | share_proc={0} notif={1} "
+          "subscribe={2} auth={3}"
+          .format(share_proc_time, notif_time, subscribe_time, auth_time, msg))
+
+    # Give correct status code to handler
+    if msg == "warn":
+        exit(1)
+    if msg == "crit":
+        exit(2)
+    exit(0)
 
 
 if __name__ == '__main__':
