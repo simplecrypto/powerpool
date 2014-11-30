@@ -391,13 +391,15 @@ class StratumClient(GenericClient):
         err = {'id': id_val,
                'result': None,
                'error': (num, self.errors[num], None)}
-        self.logger.debug("Error number {}".format(num, self.peer_name[0]))
+        if __debug__:
+            self.logger.debug("Error number {}".format(num, self.peer_name[0]))
         self.write_queue.put(json.dumps(err, separators=(',', ':')) + "\n")
 
     def send_success(self, id_val=1):
         """ Utility for transmitting success to the client """
         succ = {'id': id_val, 'result': True, 'error': None}
-        self.logger.debug("success response: {}".format(pformat(succ)))
+        if __debug__:
+            self.logger.debug("success response: {}".format(pformat(succ)))
         self.write_queue.put(json.dumps(succ, separators=(',', ':')) + "\n")
 
     def push_difficulty(self):
@@ -435,9 +437,10 @@ class StratumClient(GenericClient):
             self.difficulty = self.next_diff
             self.push_difficulty()
 
-        self.logger.debug("Sending job id {} to worker {}.{}{}"
-                          .format(job.job_id, self.address, self.worker,
-                                  " after timeout" if timeout else ''))
+        if __debug__:
+            self.logger.debug("Sending job id {} to worker {}.{}{}"
+                              .format(job.job_id, self.address, self.worker,
+                                      " after timeout" if timeout else ''))
 
         self._push(job)
 
@@ -560,8 +563,9 @@ class StratumClient(GenericClient):
         # shares per minute
         spm_tar = self.config['vardiff']['spm_target']
         ideal_diff = self.reporter.spm(self.address) / spm_tar
-        self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
-                          .format(self._id, ideal_diff))
+        if __debug__:
+            self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
+                              .format(self._id, ideal_diff))
         # find the closest tier for them
         new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
 
@@ -570,7 +574,7 @@ class StratumClient(GenericClient):
                 "VARDIFF: Moving to D{} from D{} on {}.{}"
                 .format(new_diff, self.difficulty, self.address, self.worker))
             self.next_diff = new_diff
-        else:
+        elif __debug__:
             self.logger.debug("VARDIFF: Not adjusting difficulty, already "
                               "close enough")
 
@@ -667,7 +671,9 @@ class StratumClient(GenericClient):
                 'id': data['id']
             }
             self.subscribed = True
-            self.logger.debug("Sending subscribe response: {}".format(pformat(ret)))
+            if __debug__:
+                self.logger.debug("Sending subscribe response: {}"
+                                  .format(pformat(ret)))
             self.write_queue.put(json.dumps(ret) + "\n")
 
         elif meth == "mining.authorize":
