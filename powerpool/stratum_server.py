@@ -568,18 +568,19 @@ class StratumClient(GenericClient):
                               .format(self._id, ideal_diff))
         # find the closest tier for them
         new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+        self.last_diff_adj = time.time()
 
         if new_diff != self.difficulty:
             self.logger.info(
                 "VARDIFF: Moving to D{} from D{} on {}.{}"
                 .format(new_diff, self.difficulty, self.address, self.worker))
             self.next_diff = new_diff
+            self.push_job(timeout=True)
+            return True
         elif __debug__:
             self.logger.debug("VARDIFF: Not adjusting difficulty, already "
                               "close enough")
-
-        self.last_diff_adj = time.time()
-        self.push_job(timeout=True)
+        return False
 
     @loop(fin='stop', exit_exceptions=(socket.error, ))
     def read(self):
@@ -594,16 +595,18 @@ class StratumClient(GenericClient):
 
         if line == 'timeout':
             t = time.time()
+            # Set idle status if they haven't submitted in the perscribed time
             if not self.idle and (t - self.last_share_submit) > self.config['idle_worker_threshold']:
                 self.idle = True
                 self.server.idle_clients += 1
 
-            # push a new job if
+            # Disconnect if we havne't heard from them in a while
             if (t - self.last_share_submit) > self.config['idle_worker_disconnect_threshold']:
                 self.logger.info("Disconnecting worker {}.{} at ip {} for inactivity"
                                  .format(self.address, self.worker, self.peer_name[0]))
                 self.stop()
 
+            # push a new job if
             if (self.authenticated is True and  # don't send to non-authed
                 # force send if we need to push a new difficulty
                 (self.next_diff != self.difficulty or
@@ -611,9 +614,18 @@ class StratumClient(GenericClient):
                     t > (self.last_job_push +
                          self.config['push_job_interval'] -
                          self.time_seed))):
+
+                # Since they might not be submitting jobs due to low hashrate,
+                # check vardiff on timeout in addition to on mining submit
                 if self.config['vardiff']['enabled'] is True:
-                    self.recalc_vardiff()
-                self.push_job(timeout=True)
+                    # If recalc didn't need to adjust then we need to push
+                    # because we're timed out
+                    if not self.recalc_vardiff():
+                        self.push_job(timeout=True)
+                else:
+                    self.push_job(timeout=True)
+
+            # Continue loop, we just sent new job after timeout
             return
 
         line = line.strip()
