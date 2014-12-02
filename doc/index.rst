@@ -19,6 +19,7 @@ Features
 * SHA256, X11, scrypt, and scrypt-n support
 * Support for merge mining multiple auxilury (merge mined) blockchains
 * Modular architecture makes customization simple(r)
+* Support for sending statistics via statsd
 
 Uses Redis to log shares and statistics for miners. Work generation and
 (bit|lite|alt)coin data structure serialization is performed by `Cryptokit
@@ -29,18 +30,12 @@ Python 2.7 is supported.
 Built to power the `SimpleMulti <http://simplemulti.com>`_ mining pool.
 
 
+Indices and tables
+-------------------
+
 .. toctree::
    :maxdepth: 2
 
    setup.rst
    push.rst
    api.rst
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
-

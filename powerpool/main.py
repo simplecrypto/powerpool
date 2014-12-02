@@ -217,6 +217,7 @@ class PowerPool(Component, DatagramServer):
                              exc_info=True)
 
     def log_event(self, event):
+        """ Sends an event to statsd """
         if self.events_enabled:
             self.event_socket.sendto(event, self.events_address)
 
@@ -265,6 +266,8 @@ class PowerPool(Component, DatagramServer):
             self.logger.info("=" * 80)
 
     def dump_objgraph(self):
+        """ Dump garbage collection information on SIGUSR1 to aid debugging
+        memory leaks """
         import gc
         gc.collect()
         import objgraph

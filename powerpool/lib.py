@@ -133,7 +133,8 @@ def loop(interval=None, precise=False, fin=None, exit_exceptions=None, setup=Non
 
 
 class Component(object):
-    """ Abstract base class documenting the component architecture expectations
+    """ Abstract base class documenting the component architecture expectations.
+    Each major part of powerpool inherits from this class.
     """
     # Provides default configuration values. To make a configuration key required
     # simply make the value = REQUIRED
@@ -144,7 +145,6 @@ class Component(object):
     gl_methods = []
     one_min_stats = []
     one_sec_stats = []
-    dependencies = {}
 
     @property
     def name(self):
@@ -205,7 +205,8 @@ class Component(object):
 
         Since configuration values of certain components can't be reloaded at
         runtime it's good practice to log a warning when a change is detected
-        but can't be implemented. """
+        but can't be implemented. Not currently used, but set aside for sunnier
+        days. """
         pass
 
     def _incr(self, counter, amount=1):
