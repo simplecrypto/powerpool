@@ -3,6 +3,13 @@ PowerPool
 
 Read the docs here: http://powerpool.readthedocs.org/
 
+Questions
+=========
+
+If you're having trouble you can ask on the mailing list.
+
+#### [Simplecrypto Development Google Group](https://groups.google.com/forum/#!forum/simplecrypto-dev)
+
 Donate
 ======
 
