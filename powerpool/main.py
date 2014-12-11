@@ -66,15 +66,17 @@ class PowerPool(Component, DatagramServer):
                     server_number=0,
                     algorithms=dict(
                         x11={"module": "drk_hash.getPoWHash",
-                             "hashes_per_share": 4294967296},
+                             "hashes_per_share": 4294967296},  # 2^32
                         scrypt={"module": "ltc_scrypt.getPoWHash",
-                                "hashes_per_share": 65536},
+                                "hashes_per_share": 65536},  # 2^16
                         scryptn={"module": "vtc_scrypt.getPoWHash",
                                  "hashes_per_share": 65536},
                         blake256={"module": "blake_hash.getPoWHash",
                                   "hashes_per_share": 65536},
                         sha256={"module": "cryptokit.sha256d",
-                                "hashes_per_share": 4294967296}
+                                "hashes_per_share": 4294967296},
+                        lyra2re={"module": "lyra2re_hash.getPoWHash",
+                                 "hashes_per_share": 33554432}  # 2^25
                     ))
 
     @classmethod
