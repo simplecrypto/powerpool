@@ -335,9 +335,10 @@ DRK:
 # Here is a simple example for how you might do a Scrypt-N main chain coin
 VTC:
      type: powerpool.jobmanagers.MonitorNetwork
-     algo: scryptn
+     algo: lyra2re
      currency: VTC
      pool_address: Vp2nkmREFef7RPKZ5yxHZgfsXNnUxiA5sn
+     diff1: 0x0000007FFFFF0000000000000000000000000000000000000000000000000000
      coinservs:
          - port: 40005
            address: 127.0.0.1
