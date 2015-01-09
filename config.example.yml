@@ -143,7 +143,7 @@ redis_scrypt:
         chain: "LTC"
     redis:
         port: 6379
-    #chain: 1
+    chain: 1
 
 #### Example X11 Reporter ####
 #redis_x11:
@@ -293,6 +293,36 @@ redis_scrypt:
     # Time between pinging rpc_servers that are down
     #rpc_ping_int: 2
 
+
+# Now we'll look at a profit switching job manager. The switching job manager
+# is a layer on top of the other jobmanagers. It expects to find a key in redis
+# for each currency which represents a profit 'score' for that currency. A
+# naive score can be something like the current price of that currency.
+
+# The switcher will compare the scores & factor in each coin's difficulty &
+# block reward to determine which coin to currently mine. The code actually
+# recalculates after every new block, which allows for high speed switching
+
+# redis key format: SET [currency_code]_profit "1.0"
+
+#SWITCH:
+    # Use the correct jobmanger module
+    #type: powerpool.jobmanagers.switching_jobmanager.MonitorNetworkMulti
+
+    # Algo should be one that is enabled in the PP module above
+    #algo: REQUIRED. STR algo "scrypt", "x11", etc..
+
+    # How often to poll redis for a profit score
+    #profit_poll_int: 15
+
+    # Push new work to miners if profit difference is greater than this
+    # multiplier - otherwise update at next job flush
+    #margin_switch: 1.25
+
+    # A list of jobmanagers to switch between
+    #jobmanagers: REQUIRED. Expects []
+
+
 ##### Example main chain jobmanager ####
 
 # A typical setup for a main chain coin. They use the
@@ -363,6 +393,20 @@ DOGE:
           username: admin1
           password: 123
           poll_priority: 100
+
+
+#### Example profit switching jobmanager ####
+
+# A typical setup for a profit switching manager. Make sure you are setting
+# a redis key for each currency
+SWITCH:
+    type: powerpool.jobmanagers.switching_jobmanager.MonitorNetworkMulti
+    algo: scrypt
+    jobmanagers:
+        - LTC
+        - MEC
+        - WDC
+    log_level: DEBUG
 
 
 ################################################
@@ -476,8 +520,6 @@ scrypt_STRAT_fixed:
     reporter: redis_scrypt
     start_difficulty: 4096
     port: 3333
-    merged:
-        - DOGE
 
 ####### VARDIFF Scrypt port example #######
 
@@ -488,8 +530,6 @@ scrypt_STRAT:
     reporter: redis_scrypt
     start_difficulty: 64
     port: 3334
-    merged:
-        - DOGE
     vardiff:
       # whether our this port will be vardiff enabled
       enabled: True
@@ -512,6 +552,15 @@ scrypt_STRAT:
           - 2048
           - 4096
           - 8192
+
+
+####### Auto switching port example #######
+
+Profit_STRAT:
+    type: powerpool.stratum_server.StratumServer
+    jobmanager: SWITCH
+    reporter: redis_ps_scrypt
+    port: 3433
 
 
 ################################################
