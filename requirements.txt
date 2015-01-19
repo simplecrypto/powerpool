@@ -5,6 +5,7 @@ PyYAML==3.10
 Flask==0.10.1
 setproctitle==1.1.8
 simplejson==3.6.5
+redis==2.10.3
 
 # Dependencies of top level req
 Jinja2==2.7.3
