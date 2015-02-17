@@ -366,15 +366,14 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                 and self._last_gbt.get('payee', '') != '':
             # Grab the darkcoin payout amount, default to 20%
             payout = self._last_gbt.get('payee_amount', self._last_gbt['coinbasevalue'] / 5)
-            self._last_gbt['coinbasevalue'] -= payout
             coinbase.outputs.append(
                 Output.to_address(payout, self._last_gbt['payee']))
-            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval reduced to {}"
+            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval {}"
                              .format(self._last_gbt['payee'], payout, self._last_gbt['coinbasevalue']))
 
         # simple output to the proper address and value
         coinbase.outputs.append(
-            Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
+            Output.to_address(self._last_gbt['coinbasevalue'] - payout, self.config['pool_address']))
 
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
