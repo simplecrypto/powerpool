@@ -382,6 +382,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                                         extranonce_length,
                                         [Transaction(unhexlify(t['data']), fees=t['fee'])
                                          for t in self._last_gbt['transactions']])
+        bt_obj.total_value = self._last_gbt['coinbasevalue'] - payout;
         # add in our merged mining data
         if mm_data:
             hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
