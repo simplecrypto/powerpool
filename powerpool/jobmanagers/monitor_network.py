@@ -367,14 +367,15 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                 and self._last_gbt.get('payee', '') != '':
             # Grab the darkcoin payout amount, default to 20%
             payout = self._last_gbt.get('payee_amount', self._last_gbt['coinbasevalue'] / 5)
+            self._last_gbt['coinbasevalue'] -= payout
             coinbase.outputs.append(
                 Output.to_address(payout, self._last_gbt['payee']))
-            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval {}"
+            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval reduced to {}"
                              .format(self._last_gbt['payee'], payout, self._last_gbt['coinbasevalue']))
 
         # simple output to the proper address and value
         coinbase.outputs.append(
-            Output.to_address(self._last_gbt['coinbasevalue'] - payout, self.config['pool_address']))
+            Output.to_address(self._last_gbt['coinbasevalue'], self.config['pool_address']))
 
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
@@ -382,7 +383,6 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                                         extranonce_length,
                                         [Transaction(unhexlify(t['data']), fees=t['fee'])
                                          for t in self._last_gbt['transactions']])
-        bt_obj.total_value = self._last_gbt['coinbasevalue'] - payout;
         # add in our merged mining data
         if mm_data:
             hashes = [bitcoin_data.hash256(tx.raw) for tx in bt_obj.transactions]
@@ -459,3 +459,4 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                         height=bt_obj.block_height - 1,
                         t=(time.time() - self._last_gbt['update_time']) * 1000))
         self.manager.log_event(event)
+        self._last_gbt['coinbasevalue'] += payout;
