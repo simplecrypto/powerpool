@@ -558,9 +558,27 @@ scrypt_STRAT:
 
 Profit_STRAT:
     type: powerpool.stratum_server.StratumServer
+    algo: scrypt
     jobmanager: SWITCH
     reporter: redis_ps_scrypt
     port: 3433
+
+# As you can see we used a different reporter for the PS port, because it is on
+# a different payout chain. We'll need to create that reporter
+
+redis_ps_scrypt:
+    type: powerpool.reporters.RedisReporter
+    pool_report_configs:
+        - worker_format_string: "{chain}"
+          user: "pool"
+        - worker_format_string: "{currency}"
+          user: "pool_currency"
+          report_merge: True
+    attrs:
+        chain: "PS Scrypt"
+    redis:
+        port: 6379
+    chain: 2
 
 
 ################################################
