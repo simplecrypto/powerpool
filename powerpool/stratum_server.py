@@ -515,7 +515,6 @@ class StratumClient(GenericClient):
 
         # Check a submitted share against previous shares to eliminate
         # duplicates
-        share = (self._id, params[2], params[4], params[3])
         share_lower = (self._id.lower(), params[2].lower(), params[4].lower(), params[3].lower())
 
         if share_lower in job.acc_shares:
