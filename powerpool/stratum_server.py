@@ -516,7 +516,9 @@ class StratumClient(GenericClient):
         # Check a submitted share against previous shares to eliminate
         # duplicates
         share = (self._id, params[2], params[4], params[3])
-        if share in job.acc_shares:
+        share_lower = (self._id.lower(), params[2].lower(), params[4].lower(), params[3].lower())
+
+        if share_lower in job.acc_shares:
             self.logger.info("Duplicate share rejected from worker {}.{}!"
                              .format(self.address, self.worker))
             self.send_error(self.DUP_SHARE_ERR, id_val=data['id'])
@@ -545,7 +547,7 @@ class StratumClient(GenericClient):
         # we want to send an ack ASAP, so do it here
         self.send_success(id_val=data['id'])
         # Add the share to the accepted set to check for dups
-        job.acc_shares.add(share)
+        job.acc_shares.add(share_lower)
         self.accepted_shares += difficulty
         self.reporter.log_share(client=self,
                                 diff=difficulty,
