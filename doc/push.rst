@@ -17,12 +17,12 @@ We're talking about shaving off ~100ms or so, which should reduce orphan
 percentages by ~0.01% - 0.1%, depending on block times. Miners often connect with
 far more latency than this.
 
-How it push block works
+How push block works
 -----------------------
 
 Standard Bitcoin/Litecoin based coinservers have a built in config option to
 allow executing a script right after a new block is discovered. We want to run
-a script that notifies our PowerPool process to check for a new block.
+a script that notifies our PowerPool process(es) to check for a new block.
 
 To accomplish this PowerPool has built in support for receiving a UDP datagram
 on its monitor port. The basic system flow looks like this:
@@ -34,11 +34,13 @@ Alertblock -> Sends a UDP datagram based on that .push file
 PowerPool -> Receives UDP datagram
 PowerPool -> Runs `getblocktemplate` on the Coinserver
 
-Note: Using a pushblock script to deliver a UDP datagram to PowerPool can
-be accomplished in many different ways. We're going to walk
-through how we've set it up on our own servers, but please note if your
-server configuration/architechture differs much from ours you may have to adapt
-this guide.
+.. note::
+
+    Using a pushblock script to deliver a UDP datagram to PowerPool can be
+    accomplished in many different ways. We're going to walk through how we've
+    set it up on our own servers, but please note if your server
+    configuration/architechture differs much from ours you may have to adapt
+    this guide.
 
 Modify the coinserver's config
 ------------------------------
@@ -60,7 +62,8 @@ Alertblock script
 Now that the coin server is trying to run /usr/bin/alertblock, you'll need to
 make that Alertblock script.
 
-Open your text editor of choice and save this to /usr/bin/alertblock
+Open your text editor of choice and save this to /usr/bin/alertblock. You'll
+also need to make it executable with ``chmod +x /usr/bin/alertblock``.
 
 .. code-block:: bash
 
@@ -73,14 +76,14 @@ Open your text editor of choice and save this to /usr/bin/alertblock
 
     Unfortunately netcat has a non-uniform implementation across different
     Linux platforms. Some platforms will require you to use "ncat" instead of
-    "nc" in the above command.
+    "nc" in the above script.
 
 
 Block .push script
 ------------------
 
 Now your Alertblock script will be looking for a
-/home/USER/coinserver_push/vertcoin.push file. The data in this file is
+``/home/USER/coinserver_push/vertcoin.push`` file. The data in this file is
 interpreted by the Alertblock script. It looks at each line and tries to send
 a UDP packet based on the info. The .push file might contain something like
 this:
@@ -110,13 +113,18 @@ For merge mined coins you'll want something slightly different:
 
     127.0.0.1 6855 DOGE _check_new_jobs signal=1 _single_exec=True __spawn=1
 
+The reason for all this is that we can change which powerpool servers recieve
+push block notifications without needing to restart any powerpool servers or
+coinservers. A hardcoded implementation is simpler to setup, although more
+brittle.
 
 Powerpool config
 ----------------
 
-Now we need to update PowerPool's config to not poll, as it is no longer needed,
-and makes the coinserver's logs a lot harder to use. All that needs to be done
-is set the `poll` key to False for each currency you have push block setup for.
+Now we need to update PowerPool's config to not poll, as it is no longer
+needed, and makes the coinserver's logs a lot harder to use. All that needs to
+be done is set the ``poll`` key to ``False`` for each currency you have push
+block setup for.
 
 .. code-block:: python
 
@@ -130,7 +138,7 @@ is set the `poll` key to False for each currency you have push block setup for.
 Confirm it is working
 ---------------------
 
-You'll want to double check push block notifications are actually
-working as planned. The easiest way is to visit PowerPool's monitoring endpoint
-and look for the `last_signal` key. It should be updated each time PowerPool is
+You'll want to double check push block notifications are actually working as
+planned. The easiest way is to visit PowerPool's monitoring endpoint and look
+for the ``last_signal`` key. It should be updated each time PowerPool is
 notified of a block via push block.
