@@ -2,8 +2,8 @@
 # PowerPool configuration file
 # -----------------------------------------
 # Each item in the list is a discreet component in powerpool that will get
-# created Type specifies the fully qualified python path to the module. A basic
-# powerpool server will contain one of each of the following:
+# created. Type specifies the fully qualified python path to the module. A
+# basic powerpool server will contain one of each of the following:
 #
 # * PowerPool: handles starting/stopping + configuring everything
 # * Jobmanager: creates jobs to be sent to miners and submits solved blocks

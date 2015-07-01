@@ -41,23 +41,35 @@ and you should be good to go for testing.
 And now your stratum server is (or should be...) running. Point a miner at it
 on ``localhost:3333`` (or more specifically, ``stratum+tcp://localhost:3333``
 and do some mining. View server health on the monitor port at
-``http://localhost:3855``. Various events will recorded into Redis in a format
-that SimpleCoin is familiar with. See `Simple Coin
-<https://github.com/simplecrypto/simplecoin>`_ for a reference implementation
-of a frontend that is compaitble with PowerPool.
+``http://localhost:3855``. Various events will be recorded into Redis in a
+format that SimpleCoin is familiar with. See `Simple Coin
+<https://github.com/simplecrypto/simplecoin_multi>`_ for a reference
+implementation of a frontend that is compaitble with PowerPool.
 
 Production Use
 --------------
 
-There's no guide at this point, but some general recommendations for new pool ops:
+There's no official guide at this point, but some general recommendations for
+new pool ops. Realize that unfortunately running a well optimized pool is
+complicated, so do your reading and don't become a hidden cost for your miners
+by being uneducated.
 
 * Increase the number of connections on your coinserver with ``maxconnections``
-  configuration parameter.
+  configuration parameter. This helps you get notified of new blocks more
+  quickly, leading to lower orphan rates.
 * Recompile your coinserver from source with an increased
   ``MAX_OUTBOUND_CONNECTIONS`` in ``net.cpp``. This will cause blocks that you
   solve to propogate to the network more rapidly.
-* Change your ``stop-writes-on-bgsave-error`` configuration to ``no`` for Redis, in
-  case you run out of disk space.
+* Increase ``rpcthreads`` configuration on coinservers. Generally you want at
+  least few threads for the frontend (simplecoin_multi), and a few threads for
+  each powerpool that connects to the server. If you are running polling
+  instead of push block the rpcserver can become thread starved and block
+  sumits, etc might fail.
+* Setup Nagios to monitor your coinservers. This will help you know when they're
+  getting slow or thread starved.
+* Change your ``stop-writes-on-bgsave-error`` configuration to ``no`` for
+  Redis, in case you run out of disk space. However you should setup a Nagios
+  to make sure this isn't a normal occurance.
 * Run PowerPool with ``PYTHONOPTIMIZE=2`` enviroment variable to skip all
   debugging computations/logging.
 * Use a service like Nagios or Sensu to monitor your Stratum server ports with
@@ -67,3 +79,5 @@ There's no guide at this point, but some general recommendations for new pool op
   There is an example upstart config in the contrib folder.
 * Use a firewall to block public access to your debugging port (``3855`` by
   default..), since it contains sensative information.
+* Read and understand the config.yml.example. It should be thoroughly commented
+  and up to date, and if it's not open a ticket for us.
