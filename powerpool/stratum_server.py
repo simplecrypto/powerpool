@@ -616,9 +616,7 @@ class StratumClient(GenericClient):
                 (self.next_diff != self.difficulty or
                     # send if we're past the push interval
                     t > (self.last_job_push +
-                         self.config['push_job_interval'] -
-                         self.time_seed))):
-
+                         self.config['push_job_interval']))):
                 # Since they might not be submitting jobs due to low hashrate,
                 # check vardiff on timeout in addition to on mining submit
                 if self.config['vardiff']['enabled'] is True:
