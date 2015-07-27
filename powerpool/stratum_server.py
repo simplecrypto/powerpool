@@ -331,8 +331,8 @@ class StratumClient(GenericClient):
         self.address = address
 
         # Linux specific keepalive settings. OSX & Windows use system vals
-        if hasattr(sock, "TCP_KEEPIDLE") and hasattr(sock, "TCP_KEEPINTVL") \
-                and hasattr(sock, "TCP_KEEPCNT"):
+        if hasattr(socket, "TCP_KEEPIDLE") and hasattr(socket, "TCP_KEEPINTVL") \
+                and hasattr(socket, "TCP_KEEPCNT"):
             # Seconds before sending keepalive probes
             sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
             # Interval in seconds between keepalive probes
