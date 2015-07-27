@@ -371,8 +371,10 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             coinbase_value -= payout
             coinbase.outputs.append(
                 Output.to_address(payout, self._last_gbt['payee']))
-            self.logger.info("Paying out masternode at addr {}. Payout {}. Blockval reduced to {}"
-                             .format(self._last_gbt['payee'], payout, self._last_gbt['coinbasevalue']))
+            self.logger.debug(
+                "Created TX output for masternode at ({}:{}). Coinbase value "
+                "reduced to {}".format(self._last_gbt['payee'], payout,
+                                       coinbase_value))
 
         # simple output to the proper address and value
         coinbase.outputs.append(
