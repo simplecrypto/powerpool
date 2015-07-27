@@ -330,12 +330,15 @@ class StratumClient(GenericClient):
         self.sock = sock
         self.address = address
 
-        # Seconds before sending keepalive probes
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
-        # Interval in seconds between keepalive probes
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 1)
-        # Failed keepalive probles before declaring other end dead
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
+        # Linux specific keepalive settings. OSX & Windows use system vals
+        if hasattr(sock, "TCP_KEEPIDLE") and hasattr(sock, "TCP_KEEPINTVL") \
+                and hasattr(sock, "TCP_KEEPCNT"):
+            # Seconds before sending keepalive probes
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 120)
+            # Interval in seconds between keepalive probes
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 1)
+            # Failed keepalive probles before declaring other end dead
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
         self.authenticated = False
         self.subscribed = False
