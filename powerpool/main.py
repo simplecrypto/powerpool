@@ -151,10 +151,12 @@ class PowerPool(Component, DatagramServer):
                          .format(self.config['procname']))
 
         if __debug__:
-            self.logger.info("Python not running in optimized mode. For best "
-                             "performance set enviroment variable PYTHONOPTIMIZE=2")
-
-        gevent.spawn(BlockingDetector(raise_exc=False))
+            self.logger.warn(
+                "Python not running in optimized mode. For better performance "
+                "set enviroment variable PYTHONOPTIMIZE=2")
+            # Only try to detect blocking if running in debug mode.
+            # NOTE: BlockingDetector can cause (rare) PowerPool crashes
+            gevent.spawn(BlockingDetector(raise_exc=False))
 
         # Detect and load all the hash functions we can find
         for name, algo_data in self.config['algorithms'].iteritems():
