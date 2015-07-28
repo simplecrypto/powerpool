@@ -365,7 +365,7 @@ class StratumClient(GenericClient):
         self.job_counter = random.randint(0, 100000)
         # Allows us to avoid a bunch of clients getting scheduled at the same
         # time by offsetting most timing values by this
-        self.time_seed = random.uniform(0, 10)
+        self.time_seed = random.uniform(0, self.config['push_job_interval'] / 3)
         # Used to determine if they're idle
         self.last_share_submit = t
         # Used to determine if we should send another job on read loop timeout
