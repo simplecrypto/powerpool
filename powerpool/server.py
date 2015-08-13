@@ -13,7 +13,7 @@ class GenericClient(object):
         # if the address they passed is a valid address,
         # use it. Otherwise use the pool address
         bits = username.split('.', 1)
-        username = bits[0]
+        username = bits[0].strip()
         worker = ''
         if len(bits) > 1:
             parsed_w = re.sub(r'[^a-zA-Z0-9\[\]_]+', '-', str(bits[1]))
