@@ -36,3 +36,34 @@ do some mining. View server health on the monitor port at
 to be picked up by a celery worker. See `Simple Coin
 <https://github.com/simplecrypto/simplecoin>`_ for a reference implementation
 of Celery task handler.
+
+Adding a new currency
+=====================
+
+Adding a new algorithm
+----------------------
+
+Algorithm configuration is defined on the core "PowerPool" component and is
+then made available to all other components.
+
+* *key name* - the name of the configuration block, or "key name", is
+  arbitrary, and is just an identifier for the hashing algorithm to be used
+  elsewhere in the configuration.
+* *module* - this is a dotted python import path for the actual function to run to hash the data.
+* *hashes_per_share* - this defines what a difficulty 1 share **means**. IE, how many times on average would I have to hash random data to get a share of this difficulty. Computing this is a PITA, so I won't go into it here.
+
+Network Monitor
+---------------
+
+The network monitor component pings crypto coinservers and generates jobs that
+get passed to stratum servers. The parameters are well documented in the config
+example.
+
+Stratum Server
+--------------
+
+We need to define a stratum port that our users can mine on. This is a
+"StratumServer" component. The config values are well described in the example,
+just ensure that the algo is correct, along with valid address versions. Make
+sure the component name defined matches the stratum monitor url path defined in
+simplecoin configuration.
