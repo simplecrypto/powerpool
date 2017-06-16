@@ -1,6 +1,6 @@
 # Top level requirements
 git+https://github.com/simplecrypto/cryptokit.git@v0.2.10#egg=cryptokit
-gevent==1.0.1
+gevent==1.2.2
 PyYAML==3.10
 Flask==0.10.1
 setproctitle==1.1.8
