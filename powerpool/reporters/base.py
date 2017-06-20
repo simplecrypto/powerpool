@@ -63,7 +63,7 @@ class Reporter(Component):
                     start))
 
             # check each aux chain for validity
-            for chain_id, data in job.merged_data.iteritems():
+            for chain_id, data in job.merged_data.items():
                 if header_hash <= data['target']:
                     submission_threads.append(spawn(
                         data['found_block'],
@@ -166,7 +166,7 @@ class StatReporter(Reporter):
             upper = (int(t) // 60) * 60
         for stamp, data in self._minute_slices.items():
             if flush or stamp < upper:
-                for (address, worker, algo, typ), amount in data.iteritems():
+                for (address, worker, algo, typ), amount in data.items():
                     self.log_one_minute(address, worker, algo, stamp, typ, amount)
                     # XXX: GreenletExit getting raised here might cause some
                     # double reporting!

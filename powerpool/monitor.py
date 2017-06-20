@@ -10,6 +10,10 @@ from .lib import Component
 import decimal
 import os
 
+import sys
+if sys.version_info > (3,):
+    long = int
+
 
 class Logger(object):
     """ A dummy file object to allow using a logger to log requests instead
@@ -121,14 +125,14 @@ class ServerMonitor(Component, WSGIServer):
 
     def debug(self):
         data = {}
-        for key, comp in self.manager.components.iteritems():
+        for key, comp in self.manager.components.items():
             data[key] = jsonize(comp.__dict__)
         return jsonify(data)
 
     def general(self):
         from .stratum_server import StratumServer
         data = {}
-        for key, comp in self.manager.components.iteritems():
+        for key, comp in self.manager.components.items():
             dict_key = "{}_{}".format(comp.__class__.__name__, key)
             try:
                 data[dict_key] = comp.status
@@ -172,7 +176,7 @@ class ServerMonitor(Component, WSGIServer):
             abort(404)
 
         clients = {}
-        for username, client_list in lut.iteritems():
+        for username, client_list in lut.items():
             clients[username] = {client._id: client.summary
                                  for client in client_list}
             clients[username]['details_view'] = url_for(
@@ -190,7 +194,7 @@ class ServerMonitor(Component, WSGIServer):
         """ Legacy client view emulating version 0.5 support """
         lut = self.manager.component_types['StratumServer'][0].address_lut
         clients = {key: [item.summary for item in value]
-                   for key, value in lut.iteritems()}
+                   for key, value in lut.items()}
 
         return jsonify(clients=clients)
 
@@ -205,7 +209,7 @@ def jsonize(item):
     to something json.dumps will like better """
     if isinstance(item, dict):
         new = {}
-        for k, v in item.iteritems():
+        for k, v in item.items():
             k = str(k)
             if isinstance(v, deque):
                 new[k] = jsonize(list(v))
@@ -222,7 +226,7 @@ def jsonize(item):
             item.disassemble()
             return item.to_dict()
         elif isinstance(item, str):
-            return item.encode('string_escape')
+            return item.encode('unicode_escape')
         elif isinstance(item, set):
             return list(item)
         elif isinstance(item, decimal.Decimal):
@@ -230,7 +234,7 @@ def jsonize(item):
         elif isinstance(item, (int, long, bool, float)) or item is None:
             return item
         elif hasattr(item, "__dict__"):
-            return {str(k).encode('string_escape'): str(v).encode('string_escape')
-                    for k, v in item.__dict__.iteritems()}
+            return {str(k).encode('unicode_escape'): str(v).encode('unicode_escape')
+                    for k, v in item.__dict__.items()}
         else:
             return str(item)

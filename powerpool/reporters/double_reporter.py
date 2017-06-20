@@ -66,7 +66,7 @@ class DoubleReporter(Reporter):
                     start))
 
             # check each aux chain for validity
-            for chain_id, data in job.merged_data.iteritems():
+            for chain_id, data in job.merged_data.items():
                 if header_hash <= data['target']:
                     submission_threads.append(spawn(
                         data['found_block'],

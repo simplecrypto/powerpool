@@ -1,5 +1,5 @@
 # Top level requirements
-git+https://github.com/simplecrypto/cryptokit.git@v0.2.10#egg=cryptokit
+git+https://github.com/simplecrypto/cryptokit.git@0b8f81b01339e08a79b0c2a7a6076eae581dc204#egg=cryptokit
 gevent==1.2.2
 PyYAML==3.10
 Flask==0.10.1
@@ -15,4 +15,3 @@ argparse==1.2.1
 future==0.11.2
 greenlet==0.4.3
 itsdangerous==0.24
-gevent-helpers==0.1.1

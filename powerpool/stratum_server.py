@@ -185,7 +185,7 @@ class StratumServer(Component, StreamServer):
         self.active_jobs.add(job)
 
         if job.type in [0, 1]:
-            for client in self.clients.itervalues():
+            for client in self.clients.values():
                 if client.authenticated:
                     client._push(job, flush=flush, block=False)
             self.logger.info(

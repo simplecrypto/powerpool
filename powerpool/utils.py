@@ -39,7 +39,7 @@ def time_format(seconds):
 
 def recursive_update(d, u):
     """ Simple recursive dictionary update """
-    for k, v in u.iteritems():
+    for k, v in u.items():
         if isinstance(v, collections.Mapping):
             r = recursive_update(d.get(k, {}), v)
             d[k] = r

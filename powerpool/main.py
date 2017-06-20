@@ -12,7 +12,6 @@ import time
 import logging
 import sys
 
-from gevent_helpers import BlockingDetector
 from gevent import sleep
 from gevent.monkey import patch_all
 from gevent.server import DatagramServer
@@ -85,7 +84,7 @@ class PowerPool(Component, DatagramServer):
         types = [PowerPool, Reporter, Jobmanager, StratumServer]
         component_types = {cls.__name__: [] for cls in types}
         component_types['other'] = []
-        for key, config in raw_config.iteritems():
+        for key, config in raw_config.items():
             typ = import_helper(config['type'])
             # Pass the commandline arguments to the manager component
             if issubclass(typ, PowerPool):
@@ -137,12 +136,13 @@ class PowerPool(Component, DatagramServer):
             # try and fetch the git version information
             try:
                 output = subprocess.check_output("git show -s --format='%ci %h'",
-                                                 shell=True).strip().rsplit(" ", 1)
+                                                 shell=True)
+                output = output.decode('utf8')
+                output = output.strip().rsplit(' ', 1)
                 self.sha = output[1]
                 self.rev_date = output[0]
-            # celery won't work with this, so set some default
             except Exception as e:
-                self.logger.info("Unable to fetch git hash info: {}".format(e))
+                self.logger.info("Unable to fetch git hash info: {}".format(e), exception=True)
 
         self.algos = {}
         self.server_start = datetime.datetime.utcnow()
@@ -156,10 +156,12 @@ class PowerPool(Component, DatagramServer):
                 "set enviroment variable PYTHONOPTIMIZE=2")
             # Only try to detect blocking if running in debug mode.
             # NOTE: BlockingDetector can cause (rare) PowerPool crashes
-            gevent.spawn(BlockingDetector(raise_exc=False))
+            if sys.version_info < (3, 0):
+                from gevent_helpers import BlockingDetector
+                gevent.spawn(BlockingDetector(raise_exc=False))
 
         # Detect and load all the hash functions we can find
-        for name, algo_data in self.config['algorithms'].iteritems():
+        for name, algo_data in self.config['algorithms'].items():
             self.algos[name] = algo_data.copy()
             self.algos[name]['name'] = name
             mod = algo_data['module']
@@ -224,7 +226,7 @@ class PowerPool(Component, DatagramServer):
 
     def start(self):
         self.register_logger("gevent_helpers")
-        for comp in self.components.itervalues():
+        for comp in self.components.values():
             comp.manager = self
             comp.counters = self.register_stat_counters(comp, comp.one_min_stats, comp.one_sec_stats)
             if comp is not self:

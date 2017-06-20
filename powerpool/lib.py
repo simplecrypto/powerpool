@@ -10,6 +10,10 @@ from functools import wraps
 from .utils import recursive_update
 from .exceptions import ConfigurationError
 
+import sys
+if sys.version_info > (3,):
+    basestring = str
+
 
 # A sufficiently random number to not collide with real default requirement values
 REQUIRED = 2345987234589723495872345
@@ -163,7 +167,7 @@ class Component(object):
         self.config = deepcopy(self.defaults)
         # Override defaults with provided config information
         recursive_update(self.config, config)
-        for key, value in self.config.iteritems():
+        for key, value in self.config.items():
             if value == REQUIRED:
                 raise ConfigurationError(
                     "Key {} is a required configuration value for "
@@ -194,7 +198,7 @@ class Component(object):
         """ Called when the application is trying to exit. Should not block.
         """
         self.logger.info("Component {} stopping".format(self.name))
-        for method, gl in self.greenlets.iteritems():
+        for method, gl in self.greenlets.items():
             self.logger.info("Stopping greenlet {}".format(method))
             gl.kill(block=False)
 
