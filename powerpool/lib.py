@@ -4,6 +4,7 @@ import logging
 from copy import deepcopy
 from collections import deque
 from gevent import sleep, spawn
+from gevent.event import Event
 from functools import wraps
 
 from .utils import recursive_update
