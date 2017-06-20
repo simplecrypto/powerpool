@@ -58,7 +58,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         self.jobs = {}
         self.stale_jobs = deque([], maxlen=10)
         self.latest_job = None  # The last job that was generated
-        self.new_job = Event()
+        self.new_job = self.event('new_job_{}'.format(this.config['currency']))
         self.last_signal = 0.0
 
         # general current network stats
@@ -109,18 +109,10 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                              .format(self.config['signal']))
             gevent.signal(self.config['signal'], self.getblocktemplate, signal=True)
 
-        # Find desired auxmonitors
-        self.config['merged'] = set(self.config['merged'])
-        found_merged = set()
-
-        for mon in self.manager.component_types['Jobmanager']:
-            if mon.key in self.config['merged']:
-                self.auxmons.append(mon)
-                found_merged.add(mon.key)
-                mon.new_job.rawlink(self.new_merged_work)
-
-        for monitor in self.config['merged'] - found_merged:
-            self.logger.error("Unable to locate Auxmonitor(s) '{}'".format(monitor))
+        for coin in self.config['merged']:
+            event_name = 'new_job_{coin}'.format(coin=coin)
+            self.event(event_name).rawlink(self.new_merged_work)
+            self.logger.info('Listening for new aux work from {}'.format(coin))
 
     def found_block(self, raw_coinbase, address, worker, hash_hex, header, job, start):
         """ Submit a valid block (hopefully!) to the RPC servers """

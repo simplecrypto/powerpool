@@ -130,15 +130,8 @@ class StratumServer(Component, StreamServer):
         else:
             self.reporter = self._lookup(self.config['reporter'])
 
-        if not self.config['jobmanager'] and len(self.manager.component_types['Jobmanager']) == 1:
-            self.jobmanager = self.manager.component_types['Jobmanager'][0]
-        elif not self.config['jobmanager']:
-            raise ConfigurationError(
-                "There are more than one Jobmanager components, target jobmanager "
-                "must be specified explicitly!")
-        else:
-            self.jobmanager = self._lookup(self.config['jobmanager'])
-        self.jobmanager.new_job.rawlink(self.new_job)
+        event_name = 'new_job_{}'.format(self.config['jobmanager'])
+        self.event(event_name).rawlink(self.new_job)
 
         self.logger.info("Stratum server starting up on {}".format(self.listener))
         for serv in self.agent_servers:

@@ -34,7 +34,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
         self._configure(config)
         NodeMonitorMixin.__init__(self)
 
-        self.new_job = Event()
+        self.new_job = self.event('new_job_{}'.format(self.config['currency']))
         self.last_signal = 0.0
         self.last_work = {'hash': None}
         self.block_stats = dict(accepts=0,

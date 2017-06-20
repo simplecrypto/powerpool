@@ -145,6 +145,11 @@ class Component(object):
     one_min_stats = []
     one_sec_stats = []
     dependencies = {}
+    # A basic event bus to decouple components. Events are registered by name
+    bus = {}
+
+    def event(self, name):
+        return self.bus.get(name, Event())
 
     @property
     def name(self):
