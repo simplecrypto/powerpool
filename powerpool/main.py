@@ -261,7 +261,7 @@ class PowerPool(Component, DatagramServer):
             self.logger.info("Exiting requested, allowing {} seconds for cleanup."
                              .format(self.config['term_timeout']))
             try:
-                for comp in self.components.itervalues():
+                for comp in self.components.values():
                     self.logger.debug("Calling stop on component {}".format(comp))
                     comp.stop()
                 if gevent.wait(timeout=self.config['term_timeout']):

@@ -343,9 +343,9 @@ class StratumClient(GenericClient):
         # the worker id. this is also extranonce 1
         id = self.server.stratum_id_count
         if self.manager.config['extranonce_serv_size'] == 8:
-            self._id = hexlify(struct.pack('Q', id))
+            self._id = hexlify(struct.pack('Q', id)).decode('utf8')
         elif self.manager.config['extranonce_serv_size'] == 4:
-            self._id = hexlify(struct.pack('I', id))
+            self._id = hexlify(struct.pack('I', id)).decode('utf8')
         else:
             raise Exception("Unsupported extranonce size!")
 

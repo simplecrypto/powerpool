@@ -57,7 +57,7 @@ class MonitorNetworkMulti(Jobmanager):
         # the profitability information all at once after the loop to avoid
         # multiple network switches
         new_price_data = {}
-        for manager in self.jobmanagers.itervalues():
+        for manager in self.jobmanagers.values():
             currency = manager.config['currency']
             pscore = self.redis.get("{}_profit".format(currency))
 
@@ -92,7 +92,7 @@ class MonitorNetworkMulti(Jobmanager):
             self.price_data.update(new_price_data)
 
             # Update all the profit info. No preemption, just maths
-            for currency in self.jobmanagers.iterkeys():
+            for currency in self.jobmanagers.keys():
                 self.update_profitability(currency)
 
             self.logger.debug(
@@ -106,7 +106,7 @@ class MonitorNetworkMulti(Jobmanager):
         difference. Otherwise set it to be changed at next block notification.
         """
         # Get the most profitable network based on our current data
-        new_best = max(self.profit_data.iteritems(),
+        new_best = max(self.profit_data.items(),
                        key=operator.itemgetter(1))[0]
 
         if self.current_network is None:
