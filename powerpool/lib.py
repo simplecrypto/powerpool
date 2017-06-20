@@ -152,6 +152,13 @@ class Component(object):
     dependencies = {}
     # A basic event bus to decouple components. Events are registered by name
     bus = {}
+    # A shared queue where all components log statsd info. If statsd is enabled
+    # then this will be defined, otherwise will be false
+    statsd_queue = None
+
+    def _log_statsd(self, statsd_string):
+        if self.statsd_queue is not None:
+            self.statsd_queue.put(statsd_string)
 
     def event(self, name):
         return self.bus.get(name, Event())

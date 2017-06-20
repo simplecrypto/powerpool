@@ -193,7 +193,7 @@ class MonitorNetworkMulti(Jobmanager):
             ";\n\tdiff {};\n\tratio {};\n\tresult {}"
             .format(currency, block_value, float(pscore), diff,
                     ratio, self.profit_data[currency]))
-        self.manager.log_event("{name}.profitability.{curr}:{metric}|g"
+        self._log_statsd("{name}.profitability.{curr}:{metric}|g"
                                .format(name=self.manager.config['procname'],
                                        curr=currency,
                                        metric=self.profit_data[currency]))

@@ -100,7 +100,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                 if self.config['send']:
                     if start:
                         submission_time = time.time() - start
-                        self.manager.log_event(
+                        self._log_statsd(
                             "{name}.block_submission_{curr}:{t}|ms"
                             .format(name=self.manager.config['procname'],
                                     curr=self.config['currency'],

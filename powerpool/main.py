@@ -15,6 +15,7 @@ import sys
 from gevent import sleep
 from gevent.monkey import patch_all
 from gevent.server import DatagramServer
+from gevent.queue import Queue
 patch_all()
 
 from .utils import import_helper
@@ -53,7 +54,7 @@ class PowerPool(Component, DatagramServer):
     it to configured handlers.
     """
     manager = None
-    gl_methods = ['_tick_stats']
+    gl_methods = ['_tick_stats', '_process_statsd_queue']
     defaults = dict(procname="powerpool",
                     term_timeout=10,
                     extranonce_serv_size=4,
@@ -173,14 +174,6 @@ class PowerPool(Component, DatagramServer):
                 self.logger.info("Enabling {} hashing algorithm from module {}"
                                  .format(name, mod))
 
-        self.event_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.events_enabled = self.config['events']['enabled']
-        if self.events_enabled:
-            self.logger.info("Transmitting statsd formatted stats to {}:{}".format(
-                self.config['events']['host'], self.config['events']['port']))
-        self.events_address = (self.config['events']['host'].encode('utf8'),
-                               self.config['events']['port'])
-
         # Setup all our stat managers
         self._min_stat_counters = []
         self._sec_stat_counters = []
@@ -220,9 +213,22 @@ class PowerPool(Component, DatagramServer):
             self.logger.warn("Error in called function {}!".format(data),
                              exc_info=True)
 
-    def log_event(self, event):
-        if self.events_enabled:
-            self.event_socket.sendto(event, self.events_address)
+    def _process_statsd_queue(self):
+        if not self.config['events']['enabled']:
+            return
+
+        # Implicitly enable transmission of stats by defining this. Queue
+        # is populated thought Component._log_statsd
+        Component.statsd_queue = Queue()
+        self.logger.info("Transmitting statsd formatted stats to {}:{}".format(
+            self.config['events']['host'], self.config['events']['port']))
+
+        event_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        events_address = (self.config['events']['host'].encode('utf8'),
+                          self.config['events']['port'])
+
+        for statsd_string in Component.statsd_queue:
+            event_socket.sendto(event, events_address)
 
     def start(self):
         self.register_logger("gevent_helpers")

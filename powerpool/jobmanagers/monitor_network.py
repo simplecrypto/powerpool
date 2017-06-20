@@ -130,7 +130,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                     "Recording block submission outcome {} after {}"
                     .format(success, submission_time))
                 if success:
-                    self.manager.log_event(
+                    self._log_statsd(
                         "{name}.block_submission_{curr}:{t}|ms"
                         .format(name=self.manager.config['procname'],
                                 curr=self.config['currency'],
@@ -453,4 +453,4 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
                         subsidy=bt_obj.total_value,
                         height=bt_obj.block_height - 1,
                         t=(time.time() - self._last_gbt['update_time']) * 1000))
-        self.manager.log_event(event)
+        self._log_statsd(event)
