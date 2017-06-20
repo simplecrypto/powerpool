@@ -270,9 +270,9 @@ class PowerPool(Component, DatagramServer):
         import gc
         gc.collect()
         import objgraph
-        print "Dumping object growth ****"
+        print("Dumping object growth ****")
         objgraph.show_growth(limit=100)
-        print "****"
+        print("****")
 
     def exit(self, signal=None):
         """ Handle an exit request """
