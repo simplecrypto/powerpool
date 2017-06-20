@@ -225,8 +225,9 @@ class PowerPool(Component, DatagramServer):
     def start(self):
         self.register_logger("gevent_helpers")
         for comp in self.components.itervalues():
-            comp.manager = self
+            comp.manager = self  # Add a backreference for leaky abstractions
             comp.counters = self.register_stat_counters(comp, comp.one_min_stats, comp.one_sec_stats)
+            # Register a separate logger for each component
             if comp is not self:
                 comp.logger = self.register_logger(comp.name)
                 comp.start()
@@ -248,7 +249,7 @@ class PowerPool(Component, DatagramServer):
 
         try:
             gevent.wait()
-        # Allow a force exit from multiple exit signals
+        # Allow a force exit from multiple exit signals (Ctrl+C mashed multiple times)
         finally:
             self.logger.info("Exiting requested, allowing {} seconds for cleanup."
                              .format(self.config['term_timeout']))
@@ -267,6 +268,8 @@ class PowerPool(Component, DatagramServer):
             self.logger.info("=" * 80)
 
     def dump_objgraph(self):
+        """ This is a debugging method designed to be called from the datagram
+        port. It helps us debug a memory 'leak' """
         import gc
         gc.collect()
         import objgraph

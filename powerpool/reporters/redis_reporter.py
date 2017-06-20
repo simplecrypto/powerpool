@@ -5,9 +5,15 @@ from . import QueueStatReporter
 from ..stratum_server import StratumClient
 
 
-# Parameters: {"current block"'s key name,
-#              current timestamp,
-#              new key name for "current block" (something like unproc_block_{block_hash}}
+""" This is a lua script that handles rotating share logs atomically when a new
+block is solved. This allows us to do very complicated payout schemes where
+multiple mining ports can "work together" to solve a block and get paid out
+appropriately
+
+ Parameters: {"current block"'s key name,
+              current timestamp,
+              new key name for "current block" (something like unproc_block_{block_hash}}
+"""
 solve_rotate_multichain = """
 -- Get all the keys so we can find all the sharechains that contributed
 local keys = redis.call('HKEYS', ARGV[1])
