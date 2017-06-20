@@ -58,7 +58,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
         self.jobs = {}
         self.stale_jobs = deque([], maxlen=10)
         self.latest_job = None  # The last job that was generated
-        self.new_job = self.event('new_job_{}'.format(this.config['currency']))
+        self.new_job = self.event('new_job_{}'.format(self.config['currency']))
         self.last_signal = 0.0
 
         # general current network stats
