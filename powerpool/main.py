@@ -18,7 +18,7 @@ from gevent.monkey import patch_all
 from gevent.server import DatagramServer
 patch_all()
 
-from .utils import import_helper
+from .utils import import_helper, recursive_update
 from .lib import MinuteStatManager, SecondStatManager, Component
 from .jobmanagers import Jobmanager
 from .reporters import Reporter
@@ -85,15 +85,29 @@ class PowerPool(Component, DatagramServer):
         types = [PowerPool, Reporter, Jobmanager, StratumServer]
         component_types = {cls.__name__: [] for cls in types}
         component_types['other'] = []
+
+        new_defaults = raw_config.pop('defaults')
+        if new_defaults is not None:
+            for typ, new_defaults in new_defaults.iteritems():
+                # Lookup the class that we're changing the defaults for
+                cls = import_helper(typ)
+                recursive_update(cls.defaults, new_defaults)
+
+        # For each component configured in the config
         for key, config in raw_config.iteritems():
             typ = import_helper(config['type'])
-            # Pass the commandline arguments to the manager component
+
+            # Pass the commandline arguments to the 'manager' component, or
+            # highest level component that controls all others
             if issubclass(typ, PowerPool):
                 config['args'] = args
 
+            # Create a new instance of our Component given the config
             obj = typ(config)
             obj.key = key
             for typ in types:
+                # Create a lookup system for use later, categorizing each
+                # component by it's type (reporter, startum, jobmanager, etc)
                 if isinstance(obj, typ):
                     component_types[typ.__name__].append(obj)
                     break
