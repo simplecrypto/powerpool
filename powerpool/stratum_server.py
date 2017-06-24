@@ -714,7 +714,7 @@ class StratumClient(GenericClient):
                 password = ""
                 username = ""
 
-            self._log_statsd(
+            self.server._log_statsd(
                 "{name}.auth:1|c".format(name=self.manager.config['procname']))
 
             self.logger.info("Authentication request from {} for username {}"
@@ -748,7 +748,7 @@ class StratumClient(GenericClient):
             if typ == 0:
                 # Increment valid shares to calculate hashrate
                 self._incr(key + "_n1", diff)
-            self._log_statsd(
+            self.server._log_statsd(
                 "{name}.{type}:1|c\n"
                 "{name}.{type}_n1:{diff}|c\n"
                 "{name}.submit_time:{t}|ms"
