@@ -86,7 +86,7 @@ class PowerPool(Component, DatagramServer):
         component_types = {cls.__name__: [] for cls in types}
         component_types['other'] = []
 
-        new_defaults = raw_config.pop('defaults')
+        new_defaults = raw_config.pop('defaults', None)
         if new_defaults is not None:
             for typ, new_defaults in new_defaults.iteritems():
                 # Lookup the class that we're changing the defaults for
