@@ -340,6 +340,8 @@ class StratumClient(GenericClient):
             # Failed keepalive probles before declaring other end dead
             sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 5)
 
+        # A local vardiff toggle. We don't want to touch the global. A bit sloppy
+        self.vardiff_enabled = self.config['vardiff']['enabled']
         self.authenticated = False
         self.subscribed = False
         # flags for current connection state
@@ -621,7 +623,7 @@ class StratumClient(GenericClient):
 
                 # Since they might not be submitting jobs due to low hashrate,
                 # check vardiff on timeout in addition to on mining submit
-                if self.config['vardiff']['enabled'] is True:
+                if self.vardiff_enabled is True:
                     # If recalc didn't need to adjust then we need to push
                     # because we're timed out
                     if not self.recalc_vardiff():
@@ -717,6 +719,7 @@ class StratumClient(GenericClient):
                         diff = max(self.config['minimum_manual_diff'], args.diff)
                         self.difficulty = diff
                         self.next_diff = diff
+                        self.vardiff_enabled = False
             except IndexError:
                 password = ""
                 username = ""
@@ -763,7 +766,7 @@ class StratumClient(GenericClient):
                         diff=diff, t=(time.time() - t) * 1000))
 
             # don't recalc their diff more often than interval
-            if (self.config['vardiff']['enabled'] is True and
+            if (self.vardiff_enabled is True and
                     (t - self.last_diff_adj) > self.config['vardiff']['interval']):
                 self.recalc_vardiff()
 

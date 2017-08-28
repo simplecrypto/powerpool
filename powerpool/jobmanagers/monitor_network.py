@@ -381,6 +381,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             Output.to_address(coinbase_value, self.config['pool_address']))
 
         job_id = hexlify(struct.pack(str("I"), self._job_counter))
+
         bt_obj = BlockTemplate.from_gbt(self._last_gbt,
                                         coinbase,
                                         extranonce_length,
