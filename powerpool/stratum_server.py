@@ -37,6 +37,7 @@ password_arg_parser = ThrowingArgumentParser()
 password_arg_parser.add_argument('-d', '--diff', type=float)
 password_arg_parser.add_argument('--max-diff', type=float)
 password_arg_parser.add_argument('--min-diff', type=float)
+password_arg_parser.add_argument('--start-diff', type=float)
 
 
 class StratumServer(Component, StreamServer):
@@ -750,6 +751,10 @@ class StratumClient(GenericClient):
                     # Ignore malformed parser data
                     pass
                 else:
+                    if args.start_diff:
+                        diff = max(self.config['minimum_manual_diff'], args.start_diff)
+                        self.difficulty = diff
+                        self.next_diff = diff
                     if args.diff:
                         diff = max(self.config['minimum_manual_diff'], args.diff)
                         self.difficulty = diff
