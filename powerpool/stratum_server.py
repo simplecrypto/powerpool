@@ -61,7 +61,9 @@ class StratumServer(Component, StreamServer):
                     vardiff=dict(enabled=False,
                                  spm_target=20,
                                  interval=30,
-                                 tiers=[8, 16, 32, 64, 96, 128, 192, 256, 512]),
+                                 tiers=None,
+                                 minimum_difficulty=64,
+                                 maximum_difficulty=524288),
                     minimum_manual_diff=64,
                     push_job_interval=30,
                     idle_worker_disconnect_threshold=3600,
@@ -119,6 +121,35 @@ class StratumServer(Component, StreamServer):
         self.listener = (self.config['address'],
                          self.config['port'] + self.manager.config['server_number'])
         StreamServer.__init__(self, self.listener, spawn=Pool())
+
+        # Interpolate a list of tiers based on minimum and maximum difficulty
+        # as long as they haven't manually specified tiers. This allows
+        # graceful backwards compatability as well
+        min_diff = self.config['minimum_difficulty']
+        max_diff = self.config['maximum_difficulty']
+        if (self.config['vardiff']['enabled'] and
+            self.config['vardiff']['tiers'] == None and 
+            min_diff and
+            max_diff):
+            tiers = [min_diff]
+            diff = min_diff
+            while diff < max_diff:
+                diff *= 2
+                tiers.append(diff)
+            if tiers[-1] != max_diff:  # don't add a duplicate tier
+                tiers.append(max_diff)
+            self.config['tiers'] = tiers
+            if __debug__:
+                self.logger.debug(
+                    "Interpolated {} tiers from minimum_difficulty of {} and maximum_difficulty of {}"
+                    .format(tiers, min_diff, max_diff))
+
+        # Check to make sure we have tiers to work with, either manually
+        # defined or interpolated
+        if not self.config['tiers']:
+            raise ConfigurationError(
+                "No tiers for vardiff. Please specify vaild minimum_difficulty and "
+                "maximum_difficulty, or a tiers array in the vardiff config block")
 
         self.algo = self.manager.algos[self.config['algo']]
         if not self.config['reporter'] and len(self.manager.component_types['Reporter']) == 1:
