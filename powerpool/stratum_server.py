@@ -35,6 +35,8 @@ class ThrowingArgumentParser(argparse.ArgumentParser):
 
 password_arg_parser = ThrowingArgumentParser()
 password_arg_parser.add_argument('-d', '--diff', type=float)
+password_arg_parser.add_argument('--max-diff', type=float)
+password_arg_parser.add_argument('--min-diff', type=float)
 
 
 class StratumServer(Component, StreamServer):
@@ -125,8 +127,8 @@ class StratumServer(Component, StreamServer):
         # Interpolate a list of tiers based on minimum and maximum difficulty
         # as long as they haven't manually specified tiers. This allows
         # graceful backwards compatability as well
-        min_diff = self.config['minimum_difficulty']
-        max_diff = self.config['maximum_difficulty']
+        min_diff = self.config['vardiff']['minimum_difficulty']
+        max_diff = self.config['vardiff']['maximum_difficulty']
         if (self.config['vardiff']['enabled'] and
             self.config['vardiff']['tiers'] == None and 
             min_diff and
@@ -138,7 +140,7 @@ class StratumServer(Component, StreamServer):
                 tiers.append(diff)
             if tiers[-1] != max_diff:  # don't add a duplicate tier
                 tiers.append(max_diff)
-            self.config['tiers'] = tiers
+            self.config['vardiff']['tiers'] = tiers
             if __debug__:
                 self.logger.debug(
                     "Interpolated {} tiers from minimum_difficulty of {} and maximum_difficulty of {}"
@@ -146,7 +148,7 @@ class StratumServer(Component, StreamServer):
 
         # Check to make sure we have tiers to work with, either manually
         # defined or interpolated
-        if not self.config['tiers']:
+        if not self.config['vardiff']['tiers']:
             raise ConfigurationError(
                 "No tiers for vardiff. Please specify vaild minimum_difficulty and "
                 "maximum_difficulty, or a tiers array in the vardiff config block")
@@ -373,6 +375,8 @@ class StratumClient(GenericClient):
 
         # A local vardiff toggle. We don't want to touch the global. A bit sloppy
         self.vardiff_enabled = self.config['vardiff']['enabled']
+        # Make a copy of this since we might modify it with command line args
+        self.vardiff_tiers = list(self.config['vardiff']['tiers'])
         self.authenticated = False
         self.subscribed = False
         # flags for current connection state
@@ -604,7 +608,7 @@ class StratumClient(GenericClient):
             self.logger.debug("VARDIFF: Calculated client {} ideal diff {}"
                               .format(self._id, ideal_diff))
         # find the closest tier for them
-        new_diff = min(self.config['vardiff']['tiers'], key=lambda x: abs(x - ideal_diff))
+        new_diff = min(self.vardiff_tiers, key=lambda x: abs(x - ideal_diff))
         self.last_diff_adj = time.time()
 
         if new_diff != self.difficulty:
@@ -751,6 +755,17 @@ class StratumClient(GenericClient):
                         self.difficulty = diff
                         self.next_diff = diff
                         self.vardiff_enabled = False
+                    if args.max_diff:
+                        self.vardiff_tiers = [i for i in self.vardiff_tiers
+                                if i <= args.max_diff]
+                    if args.min_diff:
+                        self.vardiff_tiers = [i for i in self.vardiff_tiers
+                                if i >= args.min_diff]
+                    if __debug__:
+                        if self.vardiff_tiers != self.config['vardiff']['tiers']:
+                            self.logger.info("Vardiff tiers for client {} set to {}"
+                                    .format(self._id, self.vardiff_tiers))
+
             except IndexError:
                 password = ""
                 username = ""
