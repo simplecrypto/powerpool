@@ -1,0 +1,8 @@
+# Argon2
+git+https://github.com/icook/argon2_hash.git@441ac2d6e3bef14c002d56fb56afd709d40ca974
+# Scrypt
+ltc-scrypt==1.0
+# Lyra2RE and Lyra2REv2
+git+https://github.com/metalicjames/lyra2re-hash-python.git
+# X17
+git+https://github.com/LordzS/crypto_hash.git
