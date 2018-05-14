@@ -90,7 +90,7 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                                   .format(self.config['currency']), exc_info=True)
                 self.logger.error(getattr(e, 'error'))
 
-            if res is True:
+            if res is True || res is None:
                 # Record it for the stats
                 self.block_stats['accepts'] += 1
                 self.recent_blocks.append(
