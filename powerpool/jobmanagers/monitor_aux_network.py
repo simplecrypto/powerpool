@@ -142,8 +142,8 @@ class MonitorAuxNetwork(Jobmanager, NodeMonitorMixin):
                 break  # break retry loop if success
             else:
                 self.logger.error(
-                    "{} Aux Block failed to submit to the server, "
-                    "server returned {}!".format(self.config['currency'], res),
+                    "{} Aux Block height {} failed to submit to the server, "
+                    "server returned {}!".format(self.config['currency'], new_height, res),
                     exc_info=True)
             sleep(1)
         else:

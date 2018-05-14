@@ -315,6 +315,7 @@ class MonitorNetwork(Jobmanager, NodeMonitorMixin):
             merged_work = {}
             auxdata = {}
             for auxmon in self.auxmons:
+                # If this network hasn't pushed a job yet, skip it
                 if auxmon.last_work['hash'] is None:
                     continue
                 merged_work[auxmon.last_work['chainid']] = dict(
